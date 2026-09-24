@@ -27,6 +27,13 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust + rusqlite（SQLite WA
 | Rust 单元测试 | `cd src-tauri && cargo test` |
 | 生成应用图标源图 | `node scripts/generate-app-icon.mjs` |
 | 生成 Tauri 图标集 | `npx tauri icon src-tauri/app-icon.png` |
+| 性能基准（生成 100 万条） | `cd src-tauri && cargo run --release --bin bench_gen -- --count 1000000` |
+| 性能基准（查询 P50/P95/P99） | `cd src-tauri && cargo run --release --bin bench_gen -- --query "关键词" --rounds 200` |
+
+## 密钥与敏感信息
+
+- DeepSeek API Key：DPAPI 加密存于 `%APPDATA%\com.findflow.app\llm.key`，不进仓库；用户可在管理窗「隐私与安全」中自行粘贴或更换。
+- 更新签名私钥：`D:\AIProjects\_Keys\findflow-updater.key`（密码见该目录说明文件），禁止入库。
 
 ## 产品闭环底线（来自设计文档 §10.2，任何阶段不得违反）
 
