@@ -1,0 +1,29 @@
+# Node / 前端
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 本地数据与日志
+*.log
+*.db
+*.db-wal
+*.db-shm
+
+# IDE / 系统
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 发布产物大文件不入库（releases/ 下 source/ 与 CHANGELOG.md 仍正常入库）
+releases/**/*.exe
+releases/**/*.msi
+releases/**/*.zip
+releases/**/*.tar.gz
+releases/**/*.dmg
+releases/**/*.pkg
+releases/**/*.AppImage
+releases/**/*.deb
+releases/**/*.rpm
