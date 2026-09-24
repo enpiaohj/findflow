@@ -1,16 +1,141 @@
-use std::path::Path;
-
 use rusqlite::Connection;
+use std::path::Path;
 
 // 迁移按序号执行，PRAGMA user_version 记录已应用版本；
 // 已应用的脚本不得修改，只能追加新脚本。
 const MIGRATIONS: &[&str] = &[
-    // v1：设置表
-    "CREATE TABLE settings (
+    // v1：全量基线 Schema（设计文档 §8.1）
+    "
+    CREATE TABLE settings (
         key TEXT PRIMARY KEY,
         value_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
-    );",
+    );
+
+    CREATE TABLE volumes (
+        volume_id INTEGER PRIMARY KEY,
+        root_path TEXT NOT NULL,
+        serial INTEGER NOT NULL,
+        fs_type TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'ok',
+        journal_id TEXT,
+        last_usn INTEGER,
+        updated_ms INTEGER NOT NULL
+    );
+    CREATE TABLE scopes (
+        scope_id INTEGER PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        options_json TEXT NOT NULL DEFAULT '{}',
+        state TEXT NOT NULL DEFAULT 'idle',
+        added_at TEXT NOT NULL,
+        baseline_at TEXT,
+        last_scan_ms INTEGER
+    );
+    CREATE TABLE files (
+        file_id INTEGER PRIMARY KEY,
+        scope_id INTEGER NOT NULL REFERENCES scopes(scope_id) ON DELETE CASCADE,
+        native_serial INTEGER,
+        native_file_id INTEGER,
+        parent_path TEXT,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        ext TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL,
+        size INTEGER NOT NULL DEFAULT 0,
+        created_ms INTEGER NOT NULL DEFAULT 0,
+        modified_ms INTEGER NOT NULL DEFAULT 0,
+        attributes INTEGER NOT NULL DEFAULT 0,
+        is_dir INTEGER NOT NULL DEFAULT 0,
+        fulltext_state TEXT NOT NULL DEFAULT 'none',
+        ocr_state TEXT NOT NULL DEFAULT 'none',
+        updated_ms INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_files_name ON files(name);
+    CREATE INDEX idx_files_kind ON files(kind);
+    CREATE INDEX idx_files_size ON files(size);
+    CREATE INDEX idx_files_modified ON files(modified_ms);
+    CREATE INDEX idx_files_scope ON files(scope_id);
+    CREATE INDEX idx_files_ext ON files(ext);
+    CREATE TABLE content_state (
+        file_id INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+        extractor TEXT NOT NULL,
+        content_hash TEXT,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        indexed_ms INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE content_text (
+        file_id INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+        content_text TEXT NOT NULL
+    );
+    CREATE TABLE ocr_text (
+        file_id INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+        ocr_text TEXT NOT NULL
+    );
+    CREATE TABLE favorites (
+        file_id INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
+        fallback_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE tags (
+        tag_id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        color TEXT NOT NULL
+    );
+    CREATE TABLE file_tags (
+        file_id INTEGER NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+        tag_id INTEGER NOT NULL REFERENCES tags(tag_id) ON DELETE CASCADE,
+        PRIMARY KEY (file_id, tag_id)
+    );
+    CREATE TABLE recent_actions (
+        id INTEGER PRIMARY KEY,
+        file_id INTEGER,
+        path TEXT NOT NULL,
+        action TEXT NOT NULL,
+        happened_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_recent_path ON recent_actions(path);
+    CREATE TABLE search_history (
+        id INTEGER PRIMARY KEY,
+        query TEXT NOT NULL,
+        at TEXT NOT NULL
+    );
+    CREATE TABLE jobs (
+        job_id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        progress REAL NOT NULL DEFAULT 0,
+        message TEXT,
+        checkpoint_json TEXT,
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operation_log (
+        operation_id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        request_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        reversible_until TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE rename_undo (
+        operation_id INTEGER NOT NULL,
+        file_id INTEGER NOT NULL,
+        old_path TEXT NOT NULL,
+        new_path TEXT NOT NULL,
+        PRIMARY KEY (operation_id, file_id)
+    );
+    CREATE TABLE index_outbox (
+        event_id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL,
+        operation TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        created_ms INTEGER NOT NULL
+    );
+    CREATE INDEX idx_outbox_pending ON index_outbox(state);
+    ",
 ];
 
 pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
@@ -83,17 +208,41 @@ mod tests {
     // 必须重新打开文件数据库验证。
     #[test]
     fn migrate_persists_user_version_across_connections() {
-        let path = std::env::temp_dir().join(format!("findflow-migrate-test-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
         let conn = open(&path).unwrap();
         drop(conn);
-
         let conn = Connection::open(&path).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, MIGRATIONS.len() as i64);
-        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn schema_supports_core_flows() {
+        let conn = open_in_memory().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO scopes(path, added_at) VALUES ('D:\\\\demo', ?1)",
+            [&now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files(scope_id, name, path, kind) VALUES (1, 'a.txt', 'D:\\\\demo\\\\a.txt', 'doc')",
+            [],
+        )
+        .unwrap();
+        let fid: i64 = conn.query_row("SELECT file_id FROM files", [], |r| r.get(0)).unwrap();
+        conn.execute(
+            "INSERT INTO favorites(file_id, fallback_path, created_at) VALUES (?1, 'p', ?2)",
+            rusqlite::params![fid, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO index_outbox(file_id, operation, created_ms) VALUES (?1, 'upsert', 0)",
+            [fid],
+        )
+        .unwrap();
     }
 }

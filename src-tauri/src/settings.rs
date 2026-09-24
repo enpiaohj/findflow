@@ -29,6 +29,10 @@ impl SettingsStore {
         }
     }
 
+    pub fn get_or(&self, key: &str, default: Value) -> Value {
+        self.get(key).ok().flatten().unwrap_or(default)
+    }
+
     pub fn set(&self, key: &str, value: &Value) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -46,6 +50,12 @@ impl SettingsStore {
         let conn = self.conn.lock().unwrap();
         let affected = conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
         Ok(affected > 0)
+    }
+
+    /// 只读访问底层连接（供其他模块复用同一线程池连接）。
+    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
+        let conn = self.conn.lock().unwrap();
+        f(&conn)
     }
 }
 
@@ -71,11 +81,10 @@ pub fn delete_setting(store: State<'_, SettingsStore>, key: String) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
     use serde_json::json;
 
     fn store() -> SettingsStore {
-        SettingsStore::new(db::open_in_memory().unwrap())
+        SettingsStore::new(crate::db::open_in_memory().unwrap())
     }
 
     #[test]
@@ -96,6 +105,12 @@ mod tests {
         s.set("ui.density", &json!("compact")).unwrap();
         s.set("ui.density", &json!("large")).unwrap();
         assert_eq!(s.get("ui.density").unwrap(), Some(json!("large")));
+    }
+
+    #[test]
+    fn get_or_returns_default_when_missing() {
+        let s = store();
+        assert_eq!(s.get_or("x", json!(42)), json!(42));
     }
 
     #[test]

@@ -1,0 +1,109 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use rusqlite::params;
+
+/// outbox 消费线程：SQLite 事务先落元数据与待索引事件，后台再提交 Tantivy，
+/// 异常退出后可继续消费，避免两套存储静默不一致（设计文档 §7.3）。
+pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
+    std::thread::Builder::new()
+        .name("outbox-consumer".into())
+        .spawn(move || loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            let batch = state.db.with_conn(|c| -> Result<Vec<(i64, i64, String)>, String> {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT event_id, file_id, operation FROM index_outbox
+                         WHERE state='pending' ORDER BY event_id LIMIT 400",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                    .map_err(|e| e.to_string())?;
+                let all: Vec<(i64, i64, String)> = rows.filter_map(|x| x.ok()).collect();
+                Ok(all)
+            });
+            match batch {
+                Ok(events) if events.is_empty() => {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                Ok(events) => {
+                    for (event_id, fid, op) in &events {
+                        apply_event(&state, *fid, op);
+                        state.db.with_conn(|c| {
+                            c.execute(
+                                "DELETE FROM index_outbox WHERE event_id=?1",
+                                params![event_id],
+                            )
+                            .ok();
+                        });
+                    }
+                    let _ = state.index.commit();
+                    state.index.reload();
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(1000)),
+            }
+        })
+        .ok();
+}
+
+fn apply_event(state: &crate::AppState, fid: i64, op: &str) {
+    if op == "delete" {
+        state.index.delete(fid as u64);
+        return;
+    }
+    // upsert：重读行，内容/OCR 已就绪则一并写入。
+    let row: Option<(String, String, String, String)> = state.db.with_conn(|c| {
+        c.query_row(
+            "SELECT name, COALESCE(f.fulltext_state,'none'), COALESCE(cs.content_hash,''),
+                    COALESCE(f.ocr_state,'none')
+             FROM files f
+             LEFT JOIN content_state cs ON cs.file_id = f.file_id
+             WHERE f.file_id=?1",
+            params![fid],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .ok()
+    });
+    let Some((name, ft_state, _hash, ocr_state)) = row else {
+        state.index.delete(fid as u64);
+        return;
+    };
+    let _content = if ft_state == "done" {
+        state.db.with_conn(|c| {
+            c.query_row(
+                "SELECT content_text FROM content_text WHERE file_id=?1",
+                params![fid],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
+    let content = _content.as_deref();
+    let ocr = if ocr_state == "done" {
+        state.db.with_conn(|c| {
+            c.query_row(
+                "SELECT ocr_text FROM ocr_text WHERE file_id=?1",
+                params![fid],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
+    let doc = state.index.build_doc(fid as u64, &name, content, ocr.as_deref());
+    let _ = state.index.add(doc);
+}
