@@ -11,6 +11,7 @@ src-tauri/gen/schemas/
 *.db
 *.db-wal
 *.db-shm
+.bench/
 
 # IDE / 系统
 .DS_Store
