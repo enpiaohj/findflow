@@ -40,13 +40,30 @@ fn main() {
     ));
 
     if let Some(q) = query {
+        store
+            .with_conn(|c| {
+                c.execute_batch("CREATE INDEX IF NOT EXISTS idx_files_ext_size ON files(ext, size);")
+                    .unwrap();
+            });
         let index = findflow_lib::searchindex::SearchIndex::open_or_create(&index_dir)
             .expect("打开索引失败");
         run_query_bench(&store, &index, &q, rounds);
         return;
     }
 
+    store.with_conn(|c| {
+        c.execute_batch("CREATE INDEX IF NOT EXISTS idx_files_ext_size ON files(ext, size);")
+            .unwrap();
+    });
     println!("生成 {count} 条元数据到 {}", db_path.display());
+    // 先注册基准范围：files.scope_id 的外键依赖它
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT OR REPLACE INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\\bench', ?1)",
+            [findflow_lib::util::now_rfc3339()],
+        )
+        .unwrap();
+    });
     let started = Instant::now();
     let batch: usize = 5000;
     let mut generated = 0usize;
@@ -106,14 +123,6 @@ fn main() {
             println!("已生成 {generated} 条，速度 {:.0} 条/秒", generated as f64 / elapsed);
         }
     }
-    // 注册基准范围
-    store.with_conn(|c| {
-        c.execute(
-            "INSERT OR REPLACE INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\\bench', ?1)",
-            [findflow_lib::util::now_rfc3339()],
-        )
-        .unwrap();
-    });
     let elapsed = started.elapsed().as_secs_f64();
     println!(
         "SQLite 完成：{count} 条，总耗时 {elapsed:.1}s，平均 {:.0} 条/秒",
@@ -140,7 +149,15 @@ fn main() {
         }
         for (fid, name) in &batch_rows {
             let doc = index.build_doc(*fid as u64, name, None, None);
-            index.add(doc).unwrap();
+            if let Err(e) = index.add(doc) {
+                eprintln!("索引写入失败 fid={fid} name={name}: {e}");
+                match index.commit() {
+                    Err(ce) => eprintln!("commit 错误（根因）: {ce}"),
+                    Ok(_) => eprintln!("commit 正常"),
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                return;
+            }
         }
         indexed += batch_rows.len();
         if indexed % 100_000 == 0 {

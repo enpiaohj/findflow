@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery};
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, Query, TermQuery};
 use tantivy::schema::{
     IndexRecordOption, NumericOptions, Schema, TextOptions, Value,
 };
@@ -55,7 +55,10 @@ impl SearchIndex {
             Index::create_in_dir(dir, schema.clone()).map_err(|e| e.to_string())?
         };
         tokenizer::register(&index)?;
-        let writer = index.writer(64 * 1024 * 1024).map_err(|e| e.to_string())?;
+        // 单线程 writer：桌面场景写入吞吐足够，且避免多 worker 的 io 并发问题
+        let writer = index
+            .writer_with_num_threads(1, 64 * 1024 * 1024)
+            .map_err(|e| e.to_string())?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -171,15 +174,22 @@ impl SearchIndex {
                     }
                 }
                 _ => {
+                    // 全部连续三元组必须命中（等价子串召回），精度由 SQL 侧完整命中加权兜底
                     let tris = tokenizer::trigrams(t);
                     if tris.len() >= 2 {
-                        let terms: Vec<Term> = tris
+                        let clauses: Vec<(Occur, Box<dyn Query>)> = tris
                             .iter()
-                            .map(|g| Term::from_field_text(self.name_tri, g))
+                            .map(|g| {
+                                let q: Box<dyn Query> = Box::new(TermQuery::new(
+                                    Term::from_field_text(self.name_tri, g),
+                                    IndexRecordOption::WithFreqsAndPositions,
+                                ));
+                                (Occur::Must, q)
+                            })
                             .collect();
                         shoulds.push((
                             Occur::Should,
-                            Box::new(BoostQuery::new(Box::new(PhraseQuery::new(terms)), 0.8)),
+                            Box::new(BoostQuery::new(Box::new(BooleanQuery::new(clauses)), 0.8)),
                         ));
                     }
                 }
@@ -194,12 +204,19 @@ impl SearchIndex {
             }
         }
         if let Some(p) = phrase {
-            let terms: Vec<Term> = tokenizer::trigrams(p)
-                .iter()
-                .map(|g| Term::from_field_text(self.name_tri, g))
-                .collect();
-            if terms.len() >= 2 {
-                shoulds.push((Occur::Should, Box::new(PhraseQuery::new(terms))));
+            let tris = tokenizer::trigrams(p);
+            if tris.len() >= 2 {
+                let clauses: Vec<(Occur, Box<dyn Query>)> = tris
+                    .iter()
+                    .map(|g| {
+                        let q: Box<dyn Query> = Box::new(TermQuery::new(
+                            Term::from_field_text(self.name_tri, g),
+                            IndexRecordOption::WithFreqsAndPositions,
+                        ));
+                        (Occur::Must, q)
+                    })
+                    .collect();
+                shoulds.push((Occur::Should, Box::new(BooleanQuery::new(clauses))));
             } else if let Some(first) = p.chars().next() {
                 let s: String = first.to_string();
                 shoulds.push((Occur::Should, term(self.name, &s, 0.5)));

@@ -103,8 +103,12 @@ pub fn run(
             SortMode::Relevance => {
                 if candidate_scores.is_some() {
                     "c.sc DESC, f.modified_ms DESC"
-                } else {
+                } else if ast.modified_after_ms.is_some() || ast.modified_before_ms.is_some() {
+                    // 最近筛选：按时间序走 modified 索引
                     "f.modified_ms DESC"
+                } else {
+                    // 纯筛选（如大文件）：按大小序走 (ext,size) 复合索引
+                    "f.size DESC"
                 }
             }
             SortMode::Name => "f.name COLLATE NOCASE ASC",

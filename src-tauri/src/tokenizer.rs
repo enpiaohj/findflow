@@ -26,23 +26,21 @@ impl Tokenizer for CnTokenizer {
     type TokenStream<'a> = CnTokenStream;
 
     fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        // tokenize(Search) 直接给出重叠切分的正确字节偏移
         let mut tokens = Vec::new();
-        let mut cursor = 0usize;
         let mut position = 0usize;
-        for word in self.jieba.cut_for_search(text, true) {
-            if word.is_empty() {
+        for tok in self.jieba.tokenize(text, jieba_rs::TokenizeMode::Search, true) {
+            if tok.word.is_empty() {
                 continue;
             }
-            let off = text[cursor..].find(word).map(|o| o + cursor).unwrap_or(cursor);
             tokens.push(Token {
-                offset_from: off,
-                offset_to: off + word.len(),
+                offset_from: tok.start,
+                offset_to: tok.end,
                 position,
-                text: word.to_lowercase(),
+                text: tok.word.to_lowercase(),
                 position_length: 1,
             });
             position += 1;
-            cursor = off + word.len();
         }
         CnTokenStream { tokens, index: 0 }
     }

@@ -57,6 +57,7 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX idx_files_modified ON files(modified_ms);
     CREATE INDEX idx_files_scope ON files(scope_id);
     CREATE INDEX idx_files_ext ON files(ext);
+    CREATE INDEX idx_files_ext_size ON files(ext, size);
     CREATE TABLE content_state (
         file_id INTEGER PRIMARY KEY REFERENCES files(file_id) ON DELETE CASCADE,
         extractor TEXT NOT NULL,
