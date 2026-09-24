@@ -57,6 +57,7 @@ export default function QuickApp() {
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
   const searchGen = useRef(0);
+  const mousePos = useRef({ x: 0, y: 0 });
 
   const notice = useCallback((message: string) => {
     setToast(message);
@@ -213,7 +214,24 @@ export default function QuickApp() {
   );
 
   return (
-    <div className="app" onKeyDown={onKeyDown}>
+    <div
+      className="app"
+      onKeyDown={onKeyDown}
+      onMouseMove={(e) => {
+        mousePos.current = { x: e.clientX, y: e.clientY };
+      }}
+      onContextMenu={(e) => {
+        // 右键任意结果行 = 打开该行菜单（若命中行则先选中）
+        const target = (e.target as HTMLElement).closest(".result-row") as HTMLElement | null;
+        if (!target) return;
+        e.preventDefault();
+        const row = [...(target.parentElement?.children ?? [])].indexOf(target);
+        if (row >= 0 && row < items.length) {
+          setSelectedIndex(row);
+          setMenuFor(items[row]);
+        }
+      }}
+    >
       <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen ? (
         <>
@@ -293,6 +311,7 @@ export default function QuickApp() {
       {menuFor ? (
         <ResultMenu
           item={menuFor}
+          pos={mousePos.current}
           onClose={() => setMenuFor(null)}
           onNotice={notice}
           onRefresh={runSearch}

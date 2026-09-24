@@ -79,21 +79,44 @@ pub fn run_fulltext(
             mark_state(db.clone(), fid, "skipped", "cloud_placeholder", extractor, modified);
             continue;
         }
-        match extract_text(p, extractor) {
+        // 单文件超时隔离：卡住的解析器不会拖死整个任务（FR06）
+        let p_t = p.to_path_buf();
+        let ext_t = extractor.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name(format!("extract-{}", ext_t))
+            .spawn(move || {
+                let _ = tx.send(extract_text(&p_t, &ext_t));
+            })
+            .ok();
+        let result = match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            Ok(r) => r,
+            Err(_) => Err("extraction_timeout".to_string()),
+        };
+        match result {
             Ok(text) => {
-                let _content_hash = {
-                    let mut h = blake3::Hasher::new();
-                    h.update(text.as_bytes());
-                    h.finalize().to_hex().to_string()
-                };
                 db.with_conn(|c| {
+                    // 全部写入共用同一次加锁：mark_state 内部也会加锁，嵌套调用会自死锁
                     c.execute("DELETE FROM content_text WHERE file_id=?1", [fid]).ok();
                     c.execute(
                         "INSERT INTO content_text(file_id, content_text) VALUES (?1, ?2)",
                         params![fid, text],
                     )
                     .ok();
-                    mark_state(db.clone(), fid, "done", "", extractor, modified);
+                    c.execute(
+                        "INSERT INTO content_state(file_id, extractor, status, error_code, indexed_ms)
+                         VALUES (?1,?2,'done',NULL,?3)
+                         ON CONFLICT(file_id) DO UPDATE SET
+                           extractor=excluded.extractor, status=excluded.status,
+                           error_code=NULL, indexed_ms=excluded.indexed_ms",
+                        params![fid, extractor, util::now_ms()],
+                    )
+                    .ok();
+                    c.execute(
+                        "UPDATE files SET fulltext_state='done' WHERE file_id=?1",
+                        [fid],
+                    )
+                    .ok();
                     c.execute(
                         "INSERT INTO index_outbox(file_id, operation, created_ms) VALUES (?1,'upsert',?2)",
                         params![fid, util::now_ms()],

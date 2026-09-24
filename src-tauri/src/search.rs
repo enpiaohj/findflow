@@ -23,8 +23,17 @@ pub fn run(
     let mut candidate_scores: Option<Vec<(i64, f64)>> = None;
 
     let has_text = ast.text.is_some() || ast.phrase.is_some();
+    let query_obj = if has_text {
+        Some(index.build_query(
+            ast.text.as_deref().unwrap_or(""),
+            ast.phrase.as_deref(),
+            true,
+        ))
+    } else {
+        None
+    };
     if has_text {
-        let q = index.build_query(ast.text.as_deref().unwrap_or(""), ast.phrase.as_deref(), true);
+        let q = query_obj.as_ref().unwrap();
         let ids = index.candidate_ids(q.as_ref(), 2000)?;
         // 候选顺序即相关度顺序，转换为可比较的分数。
         let scored: Vec<(i64, f64)> = ids
@@ -161,6 +170,18 @@ pub fn run(
 
     // 附加标签
     let mut items = items;
+    // 命中片段：仅对已提取全文的条目生成（FR06）
+    if has_text {
+        if let Some(q) = &query_obj {
+            for item in items.iter_mut().take(30) {
+                if item.fulltext_state == "done" {
+                    item.snippet =
+                        index.snippet(q.as_ref(), item.file_id as u64, index.content);
+                }
+            }
+        }
+    }
+
     store.with_conn(|c| {
         for item in &mut items {
             let mut stmt = c

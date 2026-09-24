@@ -18,12 +18,13 @@ import {
 
 interface Props {
   item: FileRow | null;
+  pos?: { x: number; y: number };
   onClose: () => void;
   onNotice: (message: string) => void;
   onRefresh: () => void;
 }
 
-export default function ResultMenu({ item, onClose, onNotice, onRefresh }: Props) {
+export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: Props) {
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
@@ -71,9 +72,18 @@ export default function ResultMenu({ item, onClose, onNotice, onRefresh }: Props
     { label: "属性", action: () => run(actionProperties(path)) },
   ];
 
+  // 跟随触发位置弹出，并收在窗口范围内
+  const left = pos ? Math.min(pos.x, window.innerWidth - 250) : window.innerWidth / 2 - 110;
+  const top = pos ? Math.min(pos.y, window.innerHeight - 380) : window.innerHeight / 2 - 160;
+
   return (
     <div className="menu-overlay" onClick={onClose}>
-      <div className="menu-panel" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="menu-panel"
+        ref={menuRef}
+        style={pos ? { left, top, transform: "none" } : undefined}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="menu-title">{item.name}</div>
         {renaming ? (
           <div className="menu-rename">

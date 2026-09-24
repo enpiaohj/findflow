@@ -80,6 +80,17 @@ impl JobEngine {
         std::thread::Builder::new()
             .name(format!("job-{kind}-{job_id}"))
             .spawn(move || {
+                // 后台任务降优先级，保证用户搜索始终最高优先（设计文档 §11）
+                #[cfg(windows)]
+                unsafe {
+                    use windows::Win32::System::Threading::{
+                        SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+                    };
+                    SetThreadPriority(
+                        windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                        THREAD_PRIORITY_BELOW_NORMAL,
+                    );
+                }
                 ctx.set_state("running");
                 body(ctx);
                 handles.lock().unwrap().remove(&job_id);
