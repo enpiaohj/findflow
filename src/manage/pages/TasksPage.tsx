@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
 import {
   jobsList,
   jobPause,

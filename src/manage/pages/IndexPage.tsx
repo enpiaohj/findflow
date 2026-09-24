@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
+import { useConfirm } from "../../components/ConfirmDialog";
 import {
   scopesList,
   scopeAdd,
@@ -24,6 +25,7 @@ interface TrialScanResultLike {
 }
 
 export default function IndexPage({ notice }: PageCtx) {
+  const { confirm, confirmEl } = useConfirm();
   const [scopes, setScopes] = useState<ScopeInfo[]>([]);
   const [health, setHealth] = useState<{ totalFiles: number; fulltextDone: number; ocrDone: number } | null>(null);
   const [trial, setTrial] = useState<TrialScanResultLike | null>(null);
@@ -123,10 +125,17 @@ export default function IndexPage({ notice }: PageCtx) {
               </button>
               <button
                 className="btn-danger-text"
-                onClick={() => {
-                  if (window.confirm(`移除索引范围 ${s.path}？（同时删除该范围索引）`)) {
-                    scopeRemove(s.scopeId, true).then(reload).catch((e) => notice(String(e)));
-                  }
+                onClick={async () => {
+                  if (
+                    !(await confirm(
+                      `移除索引范围 ${s.path}？`,
+                      "将同时删除该范围的索引数据，操作不可撤销。"
+                    ))
+                  )
+                    return;
+                  scopeRemove(s.scopeId, true)
+                    .then(reload)
+                    .catch((e) => notice(String(e)));
                 }}
               >
                 移除
@@ -190,6 +199,7 @@ export default function IndexPage({ notice }: PageCtx) {
         </div>
       </section>
 
+      {confirmEl}
       <section className="card">
         <div className="card-head">
           <h3>索引操作</h3>

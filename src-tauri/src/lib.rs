@@ -30,6 +30,8 @@ use std::sync::{Arc, OnceLock};
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+pub struct HotkeyState(pub std::sync::Mutex<String>);
+
 pub struct AppState {
     pub db: Arc<settings::SettingsStore>,
     pub engine: jobs::JobEngine,
@@ -129,6 +131,7 @@ pub fn run() {
             if let Ok(sc) = hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
                 app.global_shortcut().register(sc).ok();
             }
+            app.manage(HotkeyState(std::sync::Mutex::new(hotkey)));
 
             app.manage(state);
             Ok(())
@@ -217,25 +220,43 @@ pub fn run() {
             diagnostics::log_dir_get,
             updater_cmd::updater_check,
             updater_cmd::updater_install,
-            window_cmds::open_manage,
+            hotkey::hotkey_apply,
         ])
         .run(tauri::generate_context!())
         .expect("FindFlow 启动失败");
 }
 
-pub mod window_cmds {
-    use tauri::Manager;
+pub mod hotkey {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    /// 打开完整管理窗（设置 / 分析 / 批量 / 任务）。
+    /// 改键即时生效：解绑旧键、注册新键；失败自动恢复旧键（FR01 异常闭环）。
     #[tauri::command]
-    pub fn open_manage(app: tauri::AppHandle) -> Result<(), String> {
-        // 管理窗在 tauri.conf.json 中静态创建（启动时隐藏），这里只负责显示
-        let w = app
-            .get_webview_window("manage")
-            .ok_or("管理窗尚未就绪，请稍候重试")?;
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        Ok(())
+    pub fn hotkey_apply(
+        app: tauri::AppHandle,
+        state: tauri::State<'_, crate::HotkeyState>,
+        new_hotkey: String,
+    ) -> Result<(), String> {
+        use tauri_plugin_global_shortcut::Shortcut;
+        let new_sc: Shortcut = new_hotkey
+            .parse()
+            .map_err(|_| "快捷键格式无法识别，例如 Alt+Space 或 Ctrl+J".to_string())?;
+        let gs = app.global_shortcut();
+        let old = state.0.lock().unwrap().clone();
+        if let Ok(old_sc) = old.parse::<Shortcut>() {
+            let _ = gs.unregister(old_sc);
+        }
+        match gs.register(new_sc) {
+            Ok(()) => {
+                *state.0.lock().unwrap() = new_hotkey.clone();
+                crate::settings::persist_hotkey(&app, &new_hotkey);
+                Ok(())
+            }
+            Err(e) => {
+                if let Ok(old_sc) = old.parse::<Shortcut>() {
+                    let _ = gs.register(old_sc);
+                }
+                Err(format!("注册失败（可能与其它应用冲突）：{e}"))
+            }
+        }
     }
 }

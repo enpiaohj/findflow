@@ -1,12 +1,11 @@
 import { GearIcon, CloseIcon, MaximizeIcon, MinimizeIcon } from "./Icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openManage } from "../api";
 
 interface Props {
-  onNotice?: (message: string) => void;
+  onOpenSettings?: () => void;
 }
 
-export default function TitleBar({ onNotice }: Props) {
+export default function TitleBar({ onOpenSettings }: Props) {
   const appWindow = getCurrentWindow();
   return (
     <div className="titlebar" data-tauri-drag-region>
@@ -15,18 +14,8 @@ export default function TitleBar({ onNotice }: Props) {
       <div className="titlebar-actions">
         <button
           className="titlebar-btn"
-          title="打开管理窗（设置 / 分析 / 批量 / 任务）"
-          onClick={() => {
-            document.title = "FindFlow · 请求中";
-            if (onNotice) onNotice("正在打开管理窗…");
-            openManage()
-              .then(() => {
-                document.title = "FindFlow · 已请求";
-              })
-              .catch((e) => {
-                document.title = "FindFlow · 错误: " + String(e).slice(0, 80);
-              });
-          }}
+          title="设置（Esc 返回搜索）"
+          onClick={() => onOpenSettings?.()}
         >
           <GearIcon />
         </button>

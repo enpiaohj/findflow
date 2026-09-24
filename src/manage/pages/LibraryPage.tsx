@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
 import {
   favoritesList,
   favoriteToggle,

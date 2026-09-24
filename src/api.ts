@@ -187,10 +187,11 @@ export const recentsList = (): Promise<{ path: string; action: string; at: strin
   invoke("recents_list");
 export const fileByPath = (path: string): Promise<FileRow | null> => invoke("file_by_path", { path });
 
+export const hotkeyApply = (hotkey: string): Promise<void> =>
+  invoke("hotkey_apply", { newHotkey: hotkey });
 export const updaterCheck = (): Promise<{ available: boolean; version: string | null }> =>
   invoke("updater_check");
 export const updaterInstall = (): Promise<void> => invoke("updater_install");
-export const openManage = (): Promise<void> => invoke("open_manage");
 
 export function formatBytes(n: number): string {
   if (n <= 0) return "—";

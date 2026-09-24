@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
+import { useConfirm } from "../../components/ConfirmDialog";
 import {
   batchRenamePreview,
   batchRenameExecute,
@@ -13,6 +14,7 @@ import {
 } from "../../api";
 
 export default function BatchPage({ notice }: PageCtx) {
+  const { confirm, confirmEl } = useConfirm();
   const [tab, setTab] = useState<"rename" | "move" | "organize">("rename");
   const [pathsText, setPathsText] = useState("");
   const [items, setItems] = useState<PlanItem[]>([]);
@@ -54,10 +56,10 @@ export default function BatchPage({ notice }: PageCtx) {
       .catch((e) => notice(String(e)));
   };
 
-  const executeRename = () => {
+  const executeRename = async () => {
     const okItems = items.filter((i) => i.status === "ok");
     if (okItems.length === 0) return;
-    if (!window.confirm(`确认重命名 ${okItems.length} 项？（问题项将跳过）`)) return;
+    if (!(await confirm(`确认重命名 ${okItems.length} 项？`, "问题项将跳过；完成后可一次性撤销。"))) return;
     batchRenameExecute(items)
       .then((r) => {
         setLastOp(r.operationId);
@@ -77,10 +79,10 @@ export default function BatchPage({ notice }: PageCtx) {
       .catch((e) => notice(String(e)));
   };
 
-  const executeMove = () => {
+  const executeMove = async () => {
     const okItems = items.filter((i) => i.status === "ok");
     if (okItems.length === 0) return;
-    if (!window.confirm(`确认移动 ${okItems.length} 项到 ${targetDir}？`)) return;
+    if (!(await confirm(`确认移动 ${okItems.length} 项到 ${targetDir}？`, "跨卷移动将先复制、校验后删除源文件。"))) return;
     batchMoveExecute(items, conflict)
       .then((r) => {
         notice(`完成：成功 ${r.ok}，失败 ${r.failed}，跳过 ${r.skipped}`);
@@ -261,6 +263,7 @@ export default function BatchPage({ notice }: PageCtx) {
         </section>
       ) : null}
 
+      {confirmEl}
       {tab === "organize" ? (
         <section className="card">
           <div className="card-head">
@@ -295,9 +298,13 @@ export default function BatchPage({ notice }: PageCtx) {
             </button>
             <button
               className="btn btn-primary"
-              onClick={() => {
+              onClick={async () => {
                 const okItems = items.filter((i) => i.status === "ok");
-                if (!window.confirm(`确认按建议移动 ${okItems.length} 项？`)) return;
+                if (okItems.length === 0) {
+                  notice("没有可执行的整理项");
+                  return;
+                }
+                if (!(await confirm(`确认按建议移动 ${okItems.length} 项？`))) return;
                 organizeExecute(items)
                   .then((r) => notice(`整理完成：成功 ${r.ok}，失败 ${r.failed}`))
                   .catch((e) => notice(String(e)));

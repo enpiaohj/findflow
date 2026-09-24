@@ -9,6 +9,7 @@ import { SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
+import ManageBody from "../manage/ManageBody";
 import {
   search as apiSearch,
   getSetting,
@@ -51,6 +52,7 @@ export default function QuickApp() {
   const [toast, setToast] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -71,20 +73,31 @@ export default function QuickApp() {
   }, []);
 
   // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
+  const settingsOpenRef = useRef(false);
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+
   useEffect(() => {
     const win = getCurrentWindow();
     const unlistenP = win.onFocusChanged(({ payload: focused }) => {
       if (!focused) {
-        setQuery("");
+        // 设置视图打开期间不清词（用户可能正在编辑）；普通搜索态按 FR01 清空敏感词
+        if (!settingsOpenRef.current) setQuery("");
         setPreviewPath(null);
         setMenuFor(null);
         setSortOpen(false);
-      } else {
+      } else if (!settingsOpenRef.current) {
         window.setTimeout(() => inputRef.current?.focus(), 60);
       }
     });
     return () => void unlistenP.then((f) => f());
   }, []);
+
+  // 设置视图打开期间暂停“失焦自动隐藏”，避免选目录等系统对话框打断流程
+  useEffect(() => {
+    setSetting("ui.settingsOpen", settingsOpen).catch(() => undefined);
+  }, [settingsOpen]);
 
   const changeDensity = useCallback((next: Density) => {
     setDensity(next);
@@ -121,6 +134,10 @@ export default function QuickApp() {
     (event: KeyboardEvent<HTMLDivElement>) => {
       // 中文输入法合成期间（选候选词）不拦截任何按键
       if (event.nativeEvent.isComposing) return;
+      if (settingsOpen) {
+        if (event.key === "Escape") setSettingsOpen(false);
+        return;
+      }
       if (menuFor) {
         if (event.key === "Escape") setMenuFor(null);
         return;
@@ -152,12 +169,10 @@ export default function QuickApp() {
         const it = items[selectedIndex];
         if (!it) return;
         if (event.ctrlKey) {
-          // Ctrl+Enter：在文件夹中定位（FR 键盘闭环）
           actionLocate(it.path)
             .then((m) => notice(m))
             .catch((e) => notice(String(e)));
         } else {
-          // Enter：打开后立即收回窗口，不挡当前工作
           const target = it.path;
           void getCurrentWindow().hide();
           actionOpen(target)
@@ -165,7 +180,6 @@ export default function QuickApp() {
             .catch((e) => notice(String(e)));
         }
       } else if (event.key === " " && !typing) {
-        // 仅当焦点不在搜索框时，Space 才表示“预览”；输入时 Space 是普通字符
         event.preventDefault();
         const it = items[selectedIndex];
         if (it) setPreviewPath(it.path);
@@ -195,67 +209,87 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, previewPath, menuFor, notice]
+    [items, selectedIndex, query, previewPath, menuFor, settingsOpen, notice]
   );
 
   return (
     <div className="app" onKeyDown={onKeyDown}>
-      <TitleBar onNotice={notice} />
-      <div className="searchbar">
-        <span className="searchbar-icon">
-          <SearchIcon />
-        </span>
-        <input
-          ref={inputRef}
-          className="searchbar-input"
-          placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d）"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          autoFocus
-        />
-        <div className="sort-wrap" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false); }}>
-          <button className="sort-btn" onClick={() => setSortOpen((v) => !v)}>
-            {SORTS.find((s) => s.id === sort)?.label} ▾
-          </button>
-          {sortOpen ? (
-            <div className="sort-menu">
-              {SORTS.map((s) => (
-                <button
-                  key={s.id}
-                  className={s.id === sort ? "active" : ""}
-                  onClick={() => {
-                    setSort(s.id);
-                    setSortOpen(false);
-                  }}
-                >
-                  {s.label}
-                </button>
-              ))}
+      <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
+      {settingsOpen ? (
+        <>
+          <div className="settings-top">
+            <b>设置</b>
+            <button className="settings-back" onClick={() => setSettingsOpen(false)}>
+              返回搜索（Esc）
+            </button>
+          </div>
+          <ManageBody notice={notice} />
+        </>
+      ) : (
+        <>
+          <div className="searchbar">
+            <span className="searchbar-icon">
+              <SearchIcon />
+            </span>
+            <input
+              ref={inputRef}
+              className="searchbar-input"
+              placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d）"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              autoFocus
+            />
+            <div
+              className="sort-wrap"
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false);
+              }}
+            >
+              <button className="sort-btn" onClick={() => setSortOpen((v) => !v)}>
+                {SORTS.find((s) => s.id === sort)?.label} ▾
+              </button>
+              {sortOpen ? (
+                <div className="sort-menu">
+                  {SORTS.map((s) => (
+                    <button
+                      key={s.id}
+                      className={s.id === sort ? "active" : ""}
+                      onClick={() => {
+                        setSort(s.id);
+                        setSortOpen(false);
+                      }}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-        <span className="searchbar-kbd">Alt + Space</span>
-      </div>
-      <FilterBar
-        filter={filter}
-        onFilterChange={setFilter}
-        density={density}
-        onDensityChange={changeDensity}
-        count={items.length}
-      />
-      <div className="result-status">
-        {`共 ${items.length} 项 · 索引 ${total} 条 · ${elapsed} ms`}
-      </div>
-      <ResultList
-        items={items}
-        density={density}
-        selectedIndex={selectedIndex}
-        onSelect={setSelectedIndex}
-        onNotice={notice}
-        onOpen={(item) => setPreviewPath(item.path)}
-        onMenu={(item) => setMenuFor(item)}
-      />
-      <FooterBar />
+            <span className="searchbar-kbd">Alt + Space</span>
+          </div>
+          <FilterBar
+            filter={filter}
+            onFilterChange={setFilter}
+            density={density}
+            onDensityChange={changeDensity}
+            count={items.length}
+          />
+          <div className="result-status">
+            {`共 ${items.length} 项 · 索引 ${total} 条 · ${elapsed} ms`}
+          </div>
+          <ResultList
+            items={items}
+            density={density}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onNotice={notice}
+            onOpen={(item) => setPreviewPath(item.path)}
+            onMenu={(item) => setMenuFor(item)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+          <FooterBar />
+        </>
+      )}
       {menuFor ? (
         <ResultMenu
           item={menuFor}

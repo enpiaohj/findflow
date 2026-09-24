@@ -51,6 +51,17 @@ pub fn segment_excluded(seg: &str, opts: &ScopeOptions) -> bool {
 }
 
 pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, String> {
+    // 状态自愈：没有运行中的扫描任务却停留在 scanning，说明上次异常中断
+    c.execute(
+        "UPDATE scopes SET state='idle'
+         WHERE state='scanning'
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs
+           WHERE kind='initial_scan' AND state IN ('waiting','running','paused')
+         )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     let mut stmt = c
         .prepare(
             "SELECT s.scope_id, s.path, s.enabled, s.state, s.baseline_at,

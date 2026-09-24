@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
 import {
   getSetting,
   setSetting,
@@ -8,16 +8,18 @@ import {
   llmClearKey,
   updaterCheck,
   updaterInstall,
+  hotkeyApply,
 } from "../../api";
 
 export function AppearancePage({ notice }: PageCtx) {
   const [density, setDensity] = useState("compact");
   const [hotkey, setHotkey] = useState("Alt+Space");
+  const [hotkeyCommitted, setHotkeyCommitted] = useState("Alt+Space");
   const [blurHide, setBlurHide] = useState(true);
 
   useEffect(() => {
     getSetting<string>("ui.density").then((v) => v && setDensity(v)).catch(() => undefined);
-    getSetting<string>("ui.hotkey").then((v) => v && setHotkey(v)).catch(() => undefined);
+    getSetting<string>("ui.hotkey").then((v) => { if (v) { setHotkey(v); setHotkeyCommitted(v); } }).catch(() => undefined);
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
   }, []);
 
@@ -50,7 +52,19 @@ export function AppearancePage({ notice }: PageCtx) {
           <input
             value={hotkey}
             onChange={(e) => setHotkey(e.target.value)}
-            onBlur={() => setSetting("ui.hotkey", hotkey).then(() => notice("快捷键已保存，重启应用后生效")).catch(() => undefined)}
+            onBlur={() => {
+              if (hotkey === hotkeyCommitted) return;
+              hotkeyApply(hotkey)
+                .then(() => {
+                  setHotkeyCommitted(hotkey);
+                  setSetting("ui.hotkey", hotkey).catch(() => undefined);
+                  notice("快捷键已生效");
+                })
+                .catch((e) => {
+                  notice(String(e));
+                  setHotkey(hotkeyCommitted);
+                });
+            }}
           />
         </div>
         <div className="toggle-row">

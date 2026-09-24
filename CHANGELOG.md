@@ -6,6 +6,12 @@
 
 ### Added
 
+- 设置嵌入主窗口：齿轮直接在主窗内打开设置视图（Esc / 返回按钮切回搜索），移除独立管理窗，单窗口交互更直接。
+- 全局快捷键改键即时生效：解绑旧键、注册新键，失败自动恢复并提示，不再需要重启。
+- 应用内确认框替代原生 window.confirm（移除范围、批量执行、回收站清理等破坏性操作）。
+- 相似图片扫描支持自定义目录，按钮带扫描中状态与结果反馈。
+- 空结果状态新增「＋ 添加索引范围」引导按钮（首次使用一键进入配置）。
+
 #### 仓库基线
 - 仓库标准文件：README、CHANGELOG、CLAUDE.md 项目规则、AGENTS.md、SECURITY.md、.editorconfig、.gitattributes、.gitignore。
 - Tauri 2 + React 18 + TypeScript + Vite 项目脚手架、自定义标题栏、应用图标生成脚本与全套图标。
@@ -52,6 +58,8 @@
 - `src-tauri/src/bin/bench_gen.rs`：生成 10 万 / 100 万条模拟元数据与 Tantivy 索引至 `.bench/`（已 gitignore），并输出查询 P50 / P95 / P99。
 
 ### Fixed
+
+- 范围状态自愈：扫描任务异常中断后，范围不再永久停留在 scanning（列表查询时自动校正为 idle）。
 
 - 键盘闭环补全：Enter 打开（打开后窗口自动收回）、Ctrl+Enter 定位、Ctrl+C 复制路径、Ctrl+Shift+C 复制文件。
 - 中文输入法（IME）合成期间不再拦截 ↑↓ / 空格 / Enter，选候选词与打字互不干扰。

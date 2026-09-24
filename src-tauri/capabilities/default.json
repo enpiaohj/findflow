@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "双窗口默认能力：窗口控制、拖拽、对话框与系统打开器",
-  "windows": ["main", "manage"],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

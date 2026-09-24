@@ -12,6 +12,7 @@ interface Props {
   onNotice: (message: string) => void;
   onOpen: (item: FileRow) => void;
   onMenu: (item: FileRow) => void;
+  onOpenSettings?: () => void;
 }
 
 export default function ResultList({
@@ -22,6 +23,7 @@ export default function ResultList({
   onNotice,
   onOpen,
   onMenu,
+  onOpenSettings,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -36,8 +38,13 @@ export default function ResultList({
       <div className="result-empty">
         <p className="result-empty-title">没有匹配的结果</p>
         <p className="result-empty-hint">
-          尝试更短的关键词；或在管理窗「索引与搜索」中把该目录加入索引范围。
+          尝试更短的关键词，或先把常用目录加入索引范围。
         </p>
+        {onOpenSettings ? (
+          <button className="btn-primary result-empty-btn" onClick={onOpenSettings}>
+            ＋ 添加索引范围
+          </button>
+        ) : null}
       </div>
     );
   }

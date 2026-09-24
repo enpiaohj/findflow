@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { PageCtx } from "../ManageApp";
+import type { PageCtx } from "../ManageBody";
+import { useConfirm } from "../../components/ConfirmDialog";
 import {
   largeFiles,
   duplicatesStart,
@@ -20,12 +21,15 @@ interface DupGroup {
 }
 
 export default function SpacePage({ notice }: PageCtx) {
+  const { confirm, confirmEl } = useConfirm();
   const [tab, setTab] = useState<"large" | "dup" | "similar">("large");
   const [large, setLarge] = useState<FileRow[]>([]);
   const [minSize, setMinSize] = useState(100 * 1024 * 1024);
   const [dupGroups, setDupGroups] = useState<DupGroup[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [similar, setSimilar] = useState<{ files: FileRow[] }[]>([]);
+  const [simPath, setSimPath] = useState("D:\\");
+  const [simBusy, setSimBusy] = useState(false);
   const [dupJob, setDupJob] = useState<JobInfo | null>(null);
 
   const loadLarge = () => {
@@ -69,7 +73,7 @@ export default function SpacePage({ notice }: PageCtx) {
   const recycleSelected = async () => {
     const paths = [...selected];
     if (paths.length === 0) return;
-    if (!window.confirm(`将把选中的 ${paths.length} 个文件移至回收站，预计释放空间。确认？`)) return;
+    if (!(await confirm(`将把选中的 ${paths.length} 个文件移至回收站？`, "可在系统回收站中还原。"))) return;
     try {
       const token = await issueDeleteToken(paths);
       const results = await actionRecycle(paths, token);
@@ -196,16 +200,30 @@ export default function SpacePage({ notice }: PageCtx) {
         <section className="card">
           <div className="card-head">
             <h3>相似图片（dHash 感知哈希 · 独立实验，不与字节重复混淆）</h3>
-            <button
-              className="btn btn-primary"
-              onClick={() =>
-                similarImages("D:\\", 8)
-                  .then(setSimilar)
-                  .catch((e) => notice(String(e)))
-              }
-            >
-              扫描 D 盘
-            </button>
+            <div className="tag-create">
+              <input
+                value={simPath}
+                onChange={(e) => setSimPath(e.target.value)}
+                placeholder="扫描目录，如 D:\图片"
+              />
+              <button
+                className="btn-primary"
+                disabled={simBusy}
+                onClick={() => {
+                  setSimBusy(true);
+                  notice("相似图片扫描开始，大目录可能需要一些时间…");
+                  similarImages(simPath, 8)
+                    .then((g) => {
+                      setSimilar(g);
+                      notice(g.length === 0 ? "未发现相似图片组" : `发现 ${g.length} 组相似图片`);
+                    })
+                    .catch((e) => notice(String(e)))
+                    .finally(() => setSimBusy(false));
+                }}
+              >
+                {simBusy ? "扫描中…" : "开始扫描"}
+              </button>
+            </div>
           </div>
           {similar.map((g, i) => (
             <div key={i} className="dup-group">
@@ -220,6 +238,7 @@ export default function SpacePage({ notice }: PageCtx) {
           ))}
         </section>
       ) : null}
+      {confirmEl}
     </div>
   );
 }
