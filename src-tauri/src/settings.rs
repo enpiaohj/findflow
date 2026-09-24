@@ -1,0 +1,109 @@
+use std::sync::Mutex;
+
+use rusqlite::Connection;
+use serde_json::Value;
+use tauri::State;
+
+/// 全局设置存储：key -> JSON 值，SQLite 单连接互斥复用。
+pub struct SettingsStore {
+    conn: Mutex<Connection>,
+}
+
+impl SettingsStore {
+    pub fn new(conn: Connection) -> Self {
+        Self {
+            conn: Mutex::new(conn),
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Result<Option<Value>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value_json FROM settings WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        match rows.next()? {
+            Some(row) => {
+                let raw: String = row.get(0)?;
+                Ok(serde_json::from_str(&raw).ok())
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn set(&self, key: &str, value: &Value) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value_json, updated_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ON CONFLICT(key) DO UPDATE SET
+               value_json = excluded.value_json,
+               updated_at = excluded.updated_at",
+            rusqlite::params![key, value.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete(&self, key: &str) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(affected > 0)
+    }
+}
+
+#[tauri::command]
+pub fn get_setting(store: State<'_, SettingsStore>, key: String) -> Result<Option<Value>, String> {
+    store.get(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_setting(
+    store: State<'_, SettingsStore>,
+    key: String,
+    value: Value,
+) -> Result<(), String> {
+    store.set(&key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_setting(store: State<'_, SettingsStore>, key: String) -> Result<bool, String> {
+    store.delete(&key).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use serde_json::json;
+
+    fn store() -> SettingsStore {
+        SettingsStore::new(db::open_in_memory().unwrap())
+    }
+
+    #[test]
+    fn get_missing_returns_none() {
+        assert_eq!(store().get("ui.density").unwrap(), None);
+    }
+
+    #[test]
+    fn set_then_get_roundtrip() {
+        let s = store();
+        s.set("ui.density", &json!("compact")).unwrap();
+        assert_eq!(s.get("ui.density").unwrap(), Some(json!("compact")));
+    }
+
+    #[test]
+    fn set_overwrites_existing_value() {
+        let s = store();
+        s.set("ui.density", &json!("compact")).unwrap();
+        s.set("ui.density", &json!("large")).unwrap();
+        assert_eq!(s.get("ui.density").unwrap(), Some(json!("large")));
+    }
+
+    #[test]
+    fn delete_removes_key_and_reports_missing() {
+        let s = store();
+        s.set("ui.density", &json!("compact")).unwrap();
+        assert!(s.delete("ui.density").unwrap());
+        assert!(!s.delete("ui.density").unwrap());
+        assert_eq!(s.get("ui.density").unwrap(), None);
+    }
+}
