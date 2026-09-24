@@ -251,7 +251,7 @@ fn recency_from_ms(ms: i64) -> f64 {
 /// 搜索命令：query 为筛选语法文本；nl=true 时先走离线自然语言解析。
 #[tauri::command]
 pub fn cmd_search(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     query: String,
     sort: Option<String>,
     limit: Option<usize>,

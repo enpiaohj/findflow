@@ -52,6 +52,11 @@
 - `src-tauri/src/bin/bench_gen.rs`：生成 10 万 / 100 万条模拟元数据与 Tantivy 索引至 `.bench/`（已 gitignore），并输出查询 P50 / P95 / P99。
 
 ### Fixed
+
+- 修复管理窗空白：改为 tauri.conf.json 静态创建（启动隐藏），并以窗口 label 路由，不再依赖 URL 参数与运行时建窗。
+- 修复所有 AppState 命令静默失败：命令签名统一为 State<Arc<AppState>>（此前注册类型与取用类型不一致，导致搜索、添加范围等全部无响应）。
+- 修复 scopes 列表 baseline_at / files_count 列序映射错位（Invalid column type Null）。
+- 修正试扫确认卡片的空间文案（此前把文件总大小误标为索引空间）。
 - 修复 `PRAGMA user_version` 经 rusqlite `pragma_update` 写入不持久化的问题（改为 execute_batch 拼接），并补充跨连接回归测试。
 - 修复窗口早于 AppState 注册时焦点事件导致的启动崩溃（`try_state` 守卫）。
 

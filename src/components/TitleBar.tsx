@@ -17,8 +17,15 @@ export default function TitleBar({ onNotice }: Props) {
           className="titlebar-btn"
           title="打开管理窗（设置 / 分析 / 批量 / 任务）"
           onClick={() => {
+            document.title = "FindFlow · 请求中";
             if (onNotice) onNotice("正在打开管理窗…");
-            openManage().catch((e) => onNotice?.(String(e)));
+            openManage()
+              .then(() => {
+                document.title = "FindFlow · 已请求";
+              })
+              .catch((e) => {
+                document.title = "FindFlow · 错误: " + String(e).slice(0, 80);
+              });
           }}
         >
           <GearIcon />

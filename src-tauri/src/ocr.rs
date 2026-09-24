@@ -188,7 +188,7 @@ pub fn start_ocr_job(
 
 #[tauri::command]
 pub fn cmd_ocr_start(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: Option<i64>,
 ) -> Result<(), String> {
     start_ocr_job(&store, scope_id)

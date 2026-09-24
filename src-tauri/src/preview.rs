@@ -187,7 +187,7 @@ fn shell_thumbnail(p: &Path, size: i32) -> Result<String, String> {
 
 /// 收藏与标签（FR09）。
 #[tauri::command]
-pub fn favorites_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<crate::models::FileRow>, String> {
+pub fn favorites_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<crate::models::FileRow>, String> {
     store.db.with_conn(|c| {
         let mut stmt = c
             .prepare(
@@ -226,7 +226,7 @@ use crate::models::FileRow;
 
 #[tauri::command]
 pub fn favorite_toggle(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     file_id: i64,
 ) -> Result<bool, String> {
     store.db.with_conn(|c| {
@@ -256,7 +256,7 @@ pub fn favorite_toggle(
 }
 
 #[tauri::command]
-pub fn tags_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<serde_json::Value>, String> {
+pub fn tags_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<serde_json::Value>, String> {
     store.db.with_conn(|c| {
         let mut stmt = c
             .prepare("SELECT tag_id, name, color FROM tags ORDER BY name")
@@ -275,7 +275,7 @@ pub fn tags_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<serde_j
 }
 
 #[tauri::command]
-pub fn tag_create(store: tauri::State<'_, crate::AppState>, name: String, color: String) -> Result<i64, String> {
+pub fn tag_create(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, name: String, color: String) -> Result<i64, String> {
     store.db.with_conn(|c| {
         c.execute(
             "INSERT INTO tags(name, color) VALUES (?1, ?2)",
@@ -287,7 +287,7 @@ pub fn tag_create(store: tauri::State<'_, crate::AppState>, name: String, color:
 }
 
 #[tauri::command]
-pub fn tag_delete(store: tauri::State<'_, crate::AppState>, tag_id: i64) -> Result<(), String> {
+pub fn tag_delete(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, tag_id: i64) -> Result<(), String> {
     store
         .db
         .with_conn(|c| c.execute("DELETE FROM tags WHERE tag_id=?1", [tag_id]))
@@ -297,7 +297,7 @@ pub fn tag_delete(store: tauri::State<'_, crate::AppState>, tag_id: i64) -> Resu
 
 #[tauri::command]
 pub fn file_tags_set(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     file_id: i64,
     tag_ids: Vec<i64>,
 ) -> Result<(), String> {
@@ -316,7 +316,7 @@ pub fn file_tags_set(
 }
 
 #[tauri::command]
-pub fn recents_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<serde_json::Value>, String> {
+pub fn recents_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<serde_json::Value>, String> {
     store.db.with_conn(|c| {
         let mut stmt = c
             .prepare(
@@ -339,7 +339,7 @@ pub fn recents_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<serd
 /// 按路径直接取行（行内动作可能作用于索引外文件）。
 #[tauri::command]
 pub fn file_by_path(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     path: String,
 ) -> Result<Option<crate::models::FileRow>, String> {
     store.db.with_conn(|c| {

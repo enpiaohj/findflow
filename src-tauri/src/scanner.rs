@@ -413,16 +413,16 @@ pub fn start_rebuild_job(state: &crate::AppState, scope_id: i64) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn cmd_scan(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_scan(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
     start_scan_job(&state, scope_id)
 }
 
 #[tauri::command]
-pub fn cmd_recalibrate(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_recalibrate(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
     start_recalibrate_job(&state, scope_id)
 }
 
 #[tauri::command]
-pub fn cmd_rebuild(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_rebuild(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
     start_rebuild_job(&state, scope_id)
 }

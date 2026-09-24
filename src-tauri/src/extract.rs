@@ -285,7 +285,7 @@ mod tests {
 
 #[tauri::command]
 pub fn cmd_fulltext_start(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: Option<i64>,
 ) -> Result<(), String> {
     start_fulltext_job(&store, scope_id)

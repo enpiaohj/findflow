@@ -25,6 +25,20 @@
         "shadow": true,
         "skipTaskbar": true,
         "visible": true
+      },
+      {
+        "label": "manage",
+        "title": "FindFlow 管理窗",
+        "url": "index.html",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true,
+        "visible": false
       }
     ],
     "security": {

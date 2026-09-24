@@ -137,7 +137,7 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::Focused(false) => {
                 // 配置窗口先于 setup 创建，AppState 可能尚未注册
-                let Some(state) = window.try_state::<AppState>() else {
+                let Some(state) = window.try_state::<std::sync::Arc<AppState>>() else {
                     return;
                 };
                 if window.label() == "main" {
@@ -231,23 +231,13 @@ pub mod window_cmds {
     /// 打开完整管理窗（设置 / 分析 / 批量 / 任务）。
     #[tauri::command]
     pub fn open_manage(app: tauri::AppHandle) -> Result<(), String> {
-        if let Some(w) = app.get_webview_window("manage") {
-            let _ = w.show();
-            let _ = w.set_focus();
-            return Ok(());
-        }
-        WebviewWindowBuilder::new(
-            &app,
-            "manage",
-            WebviewUrl::App("index.html?window=manage".into()),
-        )
-        .title("FindFlow 管理窗")
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(900.0, 600.0)
-        .center()
-        .decorations(false)
-        .build()
-        .map_err(|e| e.to_string())?;
+        // 管理窗在 tauri.conf.json 中静态创建（启动时隐藏），这里只负责显示
+        let w = app
+            .get_webview_window("manage")
+            .ok_or("管理窗尚未就绪，请稍候重试")?;
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
         Ok(())
     }
 }

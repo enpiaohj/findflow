@@ -5,6 +5,19 @@
     <link rel="icon" type="image/svg+xml" href="/findflow.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FindFlow</title>
+    <script>
+      // 临时诊断：把未捕获错误直接显示出来（定位管理窗白屏）
+      window.addEventListener("error", function (e) {
+        try {
+          var d = document.createElement("pre");
+          d.style.cssText = "position:fixed;inset:auto 0 40% 0;margin:auto;background:#fee;color:#900;padding:10px;font-size:13px;z-index:99999;white-space:pre-wrap";
+          d.textContent = "JS错误: " + (e.message || "?") + "
+" + (e.filename || "") + ":" + (e.lineno || "");
+          (document.body || document.documentElement).appendChild(d);
+          document.title = "JS错误: " + (e.message || "?");
+        } catch (_) {}
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

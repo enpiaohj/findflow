@@ -4,7 +4,7 @@ use crate::models::IndexHealth;
 
 #[tauri::command]
 pub fn diagnostics_health(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<IndexHealth, String> {
     store.db.with_conn(|c| {
         let total: i64 = c
@@ -65,7 +65,7 @@ fn db_size(c: &rusqlite::Connection) -> i64 {
 /// 失败分类统计（任务与诊断页）。
 #[tauri::command]
 pub fn diagnostics_failures(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     store.db.with_conn(|c| {
         let mut stmt = c
@@ -134,7 +134,7 @@ fn store_health(db: &crate::settings::SettingsStore) -> Result<IndexHealth, Stri
 
 /// 数据库轻量完整性检查（§12.2）。
 #[tauri::command]
-pub fn diagnostics_integrity(store: tauri::State<'_, crate::AppState>) -> Result<String, String> {
+pub fn diagnostics_integrity(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<String, String> {
     store.db.with_conn(|c| {
         c.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())

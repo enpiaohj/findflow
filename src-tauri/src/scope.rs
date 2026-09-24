@@ -65,8 +65,9 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
                 path: r.get(1)?,
                 enabled: r.get::<_, i64>(2)? != 0,
                 state: r.get(3)?,
-                files_count: r.get(4)?,
-                baseline_at: r.get(5)?,
+                // SELECT 列序：baseline_at 第 5 列（可空），files_count 是子查询第 6 列
+                baseline_at: r.get(4)?,
+                files_count: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -74,13 +75,13 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
 }
 
 #[tauri::command]
-pub fn scopes_list(store: tauri::State<'_, crate::AppState>) -> Result<Vec<crate::models::ScopeInfo>, String> {
+pub fn scopes_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<crate::models::ScopeInfo>, String> {
     store.db.with_conn(list_scopes)
 }
 
 #[tauri::command]
 pub fn scope_add(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     path: String,
     options: Option<serde_json::Value>,
 ) -> Result<crate::models::ScopeInfo, String> {
@@ -119,7 +120,7 @@ pub fn scope_add(
 
 #[tauri::command]
 pub fn scope_remove(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     delete_index: bool,
 ) -> Result<(), String> {
@@ -138,7 +139,7 @@ pub fn scope_remove(
 
 #[tauri::command]
 pub fn scope_set_enabled(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     enabled: bool,
 ) -> Result<(), String> {
@@ -167,7 +168,7 @@ pub fn scope_set_enabled(
 
 #[tauri::command]
 pub fn scope_update_options(
-    store: tauri::State<'_, crate::AppState>,
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     options: serde_json::Value,
 ) -> Result<(), String> {

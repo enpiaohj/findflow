@@ -60,22 +60,28 @@ impl SettingsStore {
 }
 
 #[tauri::command]
-pub fn get_setting(store: State<'_, SettingsStore>, key: String) -> Result<Option<Value>, String> {
-    store.get(&key).map_err(|e| e.to_string())
+pub fn get_setting(
+    store: State<'_, std::sync::Arc<crate::AppState>>,
+    key: String,
+) -> Result<Option<Value>, String> {
+    store.db.get(&key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn set_setting(
-    store: State<'_, SettingsStore>,
+    store: State<'_, std::sync::Arc<crate::AppState>>,
     key: String,
     value: Value,
 ) -> Result<(), String> {
-    store.set(&key, &value).map_err(|e| e.to_string())
+    store.db.set(&key, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_setting(store: State<'_, SettingsStore>, key: String) -> Result<bool, String> {
-    store.delete(&key).map_err(|e| e.to_string())
+pub fn delete_setting(
+    store: State<'_, std::sync::Arc<crate::AppState>>,
+    key: String,
+) -> Result<bool, String> {
+    store.db.delete(&key).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -135,8 +135,7 @@ export default function IndexPage({ notice }: PageCtx) {
             <b>{trial.path}</b>
           </p>
           <p>
-            预计 {trial.filesEst.toLocaleString()} 个文件 · 约 {Math.max(1, Math.round(trial.bytesEst / 1024 / 1024))} MB
-            元数据与索引空间
+            预计 {trial.filesEst.toLocaleString()} 个文件 · 所选文件合计约 {Math.max(1, Math.round(trial.bytesEst / 1024 / 1024))} MB
           </p>
           <ul className="trial-sample">
             {trial.sample.slice(0, 5).map((s) => (
