@@ -30,10 +30,18 @@ export default function IndexPage({ notice }: PageCtx) {
   const [busy, setBusy] = useState(false);
 
   const reload = () => {
-    scopesList().then(setScopes).catch((e) => notice(String(e)));
+    scopesList().then(setScopes).catch(() => undefined);
     diagnosticsHealth().then(setHealth).catch(() => undefined);
   };
   useEffect(reload, []);
+  // 范围状态/数量轮询刷新，扫描完成后列表自动更新
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      scopesList().then(setScopes).catch(() => undefined);
+      diagnosticsHealth().then(setHealth).catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const addFolder = async () => {
     const picked = await open({ directory: true, multiple: false });

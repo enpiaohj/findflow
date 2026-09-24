@@ -64,7 +64,6 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -148,10 +147,9 @@ pub fn run() {
                 }
             }
             WindowEvent::CloseRequested { api, .. } => {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    window.hide().ok();
-                }
+                // 两个窗口都只隐藏不销毁：管理窗销毁后齿轮将无法再次打开
+                api.prevent_close();
+                window.hide().ok();
             }
             _ => {}
         })
@@ -226,7 +224,7 @@ pub fn run() {
 }
 
 pub mod window_cmds {
-    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    use tauri::Manager;
 
     /// 打开完整管理窗（设置 / 分析 / 批量 / 任务）。
     #[tauri::command]

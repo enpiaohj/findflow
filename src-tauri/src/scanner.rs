@@ -162,6 +162,7 @@ fn walk_dir(
 ) -> (Vec<FileUpsert>, u64) {
     let mut items = Vec::new();
     let mut errors = 0u64;
+    let mut seen = 0u64;
     // 遍历时携带"父级是否被排除"信息，实现整树跳过。
     fn walk_inner(
         dir: &Path,
@@ -170,6 +171,7 @@ fn walk_dir(
         opts: &ScopeOptions,
         items: &mut Vec<FileUpsert>,
         errors: &mut u64,
+        seen: &mut u64,
         ctx: Option<&JobContext>,
     ) {
         let read = match std::fs::read_dir(dir) {
@@ -184,6 +186,11 @@ fn walk_dir(
                 ctx.wait_if_paused();
                 if ctx.cancelled() {
                     return;
+                }
+                *seen += 1;
+                if *seen % 1000 == 0 {
+                    // 遍历阶段持续给出反馈，避免看起来像卡死
+                    ctx.progress(0.0, &format!("正在遍历，已发现 {} 项", seen));
                 }
             }
             let path = entry.path();
@@ -220,7 +227,7 @@ fn walk_dir(
                         items.push(uu);
                     }
                 }
-                walk_inner(&path, depth + 1, child_excluded, opts, items, errors, ctx);
+                walk_inner(&path, depth + 1, child_excluded, opts, items, errors, seen, ctx);
             } else if !child_excluded {
                 if let Some(mut u) = stat_entry(&path, 0, opts) {
                     u.scope_id = 0;
@@ -229,7 +236,7 @@ fn walk_dir(
             }
         }
     }
-    walk_inner(root, 0, false, opts, &mut items, &mut errors, ctx);
+    walk_inner(root, 0, false, opts, &mut items, &mut errors, &mut seen, ctx);
     (items, errors)
 }
 

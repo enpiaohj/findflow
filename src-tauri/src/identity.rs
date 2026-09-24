@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
@@ -10,7 +10,13 @@ use windows::Win32::Storage::FileSystem::{
 /// NTFS 卷内稳定标识：卷序列号 + 文件索引（设计文档 §8.2）。
 /// 路径只是可变属性；标识不可用时返回 None，自动关联降级为低置信度。
 pub fn native_identity(path: &Path) -> Option<(u32, u64)> {
-    let file = File::open(path).ok()?;
+    // 仅请求 FILE_READ_ATTRIBUTES（不申请读数据权限），
+    // 避免触发杀软全文件扫描，比完全打开快一个数量级
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0x0080) // FILE_READ_ATTRIBUTES
+        .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS（支持目录）
+        .open(path)
+        .ok()?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     let handle = HANDLE(file.as_raw_handle());
     let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };

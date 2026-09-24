@@ -9,7 +9,16 @@ import { SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
-import { search as apiSearch, getSetting, setSetting, type FileRow } from "../api";
+import {
+  search as apiSearch,
+  getSetting,
+  setSetting,
+  actionOpen,
+  actionLocate,
+  actionCopyPath,
+  actionCopyFiles,
+  type FileRow,
+} from "../api";
 import type { Density } from "../types";
 
 const DENSITY_KEY = "ui.density";
@@ -44,6 +53,14 @@ export default function QuickApp() {
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
+  // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
+  const searchGen = useRef(0);
+
+  const notice = useCallback((message: string) => {
+    setToast(message);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
 
   useEffect(() => {
     getSetting<string>(DENSITY_KEY)
@@ -53,10 +70,20 @@ export default function QuickApp() {
       .catch(() => undefined);
   }, []);
 
-  const notice = useCallback((message: string) => {
-    setToast(message);
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400);
+  // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const unlistenP = win.onFocusChanged(({ payload: focused }) => {
+      if (!focused) {
+        setQuery("");
+        setPreviewPath(null);
+        setMenuFor(null);
+        setSortOpen(false);
+      } else {
+        window.setTimeout(() => inputRef.current?.focus(), 60);
+      }
+    });
+    return () => void unlistenP.then((f) => f());
   }, []);
 
   const changeDensity = useCallback((next: Density) => {
@@ -66,14 +93,19 @@ export default function QuickApp() {
 
   const runSearch = useCallback(() => {
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
+    const gen = ++searchGen.current;
     apiSearch(q, sort === "relevance" ? undefined : sort, 200)
       .then((r) => {
+        if (gen !== searchGen.current) return;
         setItems(r.items);
         setTotal(r.total);
         setElapsed(r.elapsedMs);
       })
-      .catch(() => undefined);
-  }, [query, filter, sort]);
+      .catch((e) => {
+        if (gen !== searchGen.current) return;
+        notice("搜索失败：" + String(e));
+      });
+  }, [query, filter, sort, notice]);
 
   // 搜索：50ms 防抖（设计文档 §3.2）
   useEffect(() => {
@@ -87,6 +119,8 @@ export default function QuickApp() {
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
+      // 中文输入法合成期间（选候选词）不拦截任何按键
+      if (event.nativeEvent.isComposing) return;
       if (menuFor) {
         if (event.key === "Escape") setMenuFor(null);
         return;
@@ -98,32 +132,75 @@ export default function QuickApp() {
         }
         return;
       }
+      const inputEl = inputRef.current;
+      const typing = document.activeElement === inputEl;
+      const hasTextSelection =
+        typing &&
+        inputEl !== null &&
+        inputEl.selectionStart !== null &&
+        inputEl.selectionEnd !== null &&
+        inputEl.selectionStart !== inputEl.selectionEnd;
+
       if (event.key === "ArrowDown" && items.length > 0) {
         event.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, items.length - 1));
+        setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
-        setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (event.key === " ") {
+        setSelectedIndex((index) => Math.max(index - 1, 0));
+      } else if (event.key === "Enter" && !hasTextSelection) {
+        event.preventDefault();
+        const it = items[selectedIndex];
+        if (!it) return;
+        if (event.ctrlKey) {
+          // Ctrl+Enter：在文件夹中定位（FR 键盘闭环）
+          actionLocate(it.path)
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        } else {
+          // Enter：打开后立即收回窗口，不挡当前工作
+          const target = it.path;
+          void getCurrentWindow().hide();
+          actionOpen(target)
+            .then(() => notice("已打开 " + target.split("\\").pop()))
+            .catch((e) => notice(String(e)));
+        }
+      } else if (event.key === " " && !typing) {
+        // 仅当焦点不在搜索框时，Space 才表示“预览”；输入时 Space 是普通字符
         event.preventDefault();
         const it = items[selectedIndex];
         if (it) setPreviewPath(it.path);
       } else if (event.key === "Escape") {
         event.preventDefault();
-        if (query) setQuery("");
-        else void getCurrentWindow().hide();
+        if (query) {
+          setQuery("");
+        } else {
+          void getCurrentWindow().hide();
+        }
       } else if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         inputRef.current?.focus();
         inputRef.current?.select();
+      } else if (event.key === "c" && (event.ctrlKey || event.metaKey) && !hasTextSelection) {
+        const it = items[selectedIndex];
+        if (!it) return;
+        event.preventDefault();
+        if (event.shiftKey) {
+          actionCopyFiles([it.path])
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        } else {
+          actionCopyPath(it.path, "full")
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        }
       }
     },
-    [items, selectedIndex, query, previewPath, menuFor]
+    [items, selectedIndex, query, previewPath, menuFor, notice]
   );
 
   return (
     <div className="app" onKeyDown={onKeyDown}>
-      <TitleBar />
+      <TitleBar onNotice={notice} />
       <div className="searchbar">
         <span className="searchbar-icon">
           <SearchIcon />
@@ -136,7 +213,7 @@ export default function QuickApp() {
           onChange={(event) => setQuery(event.target.value)}
           autoFocus
         />
-        <div className="sort-wrap">
+        <div className="sort-wrap" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false); }}>
           <button className="sort-btn" onClick={() => setSortOpen((v) => !v)}>
             {SORTS.find((s) => s.id === sort)?.label} ▾
           </button>
