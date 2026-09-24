@@ -5,11 +5,13 @@ export default function FooterBar() {
         <kbd>↑</kbd>
         <kbd>↓</kbd> 选择
         <i />
-        <kbd>Esc</kbd> 清空 / 关闭
+        <kbd>Space</kbd> 预览
         <i />
-        <kbd>Ctrl+L</kbd> 聚焦搜索框
+        <kbd>Enter</kbd> 打开
+        <i />
+        <kbd>Esc</kbd> 清空 / 关闭
       </span>
-      <span className="footerbar-note">演示数据 · 索引引擎尚未接入</span>
+      <span className="footerbar-note">本地索引 · 搜索词不落盘</span>
     </div>
   );
 }

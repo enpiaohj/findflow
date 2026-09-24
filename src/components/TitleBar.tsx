@@ -1,8 +1,9 @@
 import { GearIcon, CloseIcon, MaximizeIcon, MinimizeIcon } from "./Icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openManage } from "../api";
 
 interface Props {
-  onNotice: (message: string) => void;
+  onNotice?: (message: string) => void;
 }
 
 export default function TitleBar({ onNotice }: Props) {
@@ -12,7 +13,14 @@ export default function TitleBar({ onNotice }: Props) {
       <img src="/findflow.svg" alt="" className="titlebar-logo" draggable={false} data-tauri-drag-region />
       <span className="titlebar-name" data-tauri-drag-region>FindFlow</span>
       <div className="titlebar-actions">
-        <button className="titlebar-btn" title="设置" onClick={() => onNotice("设置页将在后续版本接入")}>
+        <button
+          className="titlebar-btn"
+          title="打开管理窗（设置 / 分析 / 批量 / 任务）"
+          onClick={() => {
+            if (onNotice) onNotice("正在打开管理窗…");
+            openManage().catch((e) => onNotice?.(String(e)));
+          }}
+        >
           <GearIcon />
         </button>
         <button className="titlebar-btn" title="最小化" onClick={() => void appWindow.minimize()}>
