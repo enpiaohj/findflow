@@ -11,7 +11,6 @@ export default function FooterBar() {
         <i />
         <kbd>Esc</kbd> 清空 / 关闭
       </span>
-      <span className="footerbar-note">本地索引 · 搜索词不落盘</span>
     </div>
   );
 }
