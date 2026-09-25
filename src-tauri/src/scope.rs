@@ -24,6 +24,20 @@ pub struct ScopeOptions {
     pub include_hidden: bool,
 }
 
+/// 盘符根目录（D: / D:\\）归一化为 D:\\，其余目录去掉尾部分隔符。
+pub fn normalize_scope_path(p: &str) -> String {
+    let trimmed = p.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() == 2 && bytes[1] == b':' {
+        // 盘符统一大写，显示一致
+        format!("{}{}\\", trimmed[..1].to_ascii_uppercase(), &trimmed[1..])
+    } else if bytes.len() == 3 && bytes[1] == b':' && trimmed.ends_with('\\') {
+        trimmed.to_string()
+    } else {
+        trimmed.trim_end_matches('\\').to_string()
+    }
+}
+
 pub fn is_protected(path: &str) -> bool {
     path.split('\\')
         .any(|seg| PROTECTED_DIRS.contains(&seg.to_ascii_lowercase().as_str()))
@@ -96,7 +110,7 @@ pub fn scope_add(
     path: String,
     options: Option<serde_json::Value>,
 ) -> Result<crate::models::ScopeInfo, String> {
-    let path = path.trim_end_matches('\\').to_string();
+    let path = normalize_scope_path(&path);
     if path.len() < 3 || !path.chars().nth(1).map(|c| c == ':').unwrap_or(false) {
         return Err("请输入本地磁盘或目录的绝对路径（如 D:\\项目资料）".into());
     }
@@ -229,6 +243,15 @@ pub fn scope_trial_scan(path: String) -> Result<crate::models::TrialScanResult, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_root_paths_normalized() {
+        assert_eq!(normalize_scope_path("D:"), "D:\\");
+        assert_eq!(normalize_scope_path("D:\\"), "D:\\");
+        assert_eq!(normalize_scope_path(" d: "), "D:\\");
+        assert_eq!(normalize_scope_path("D:\\项目资料\\"), "D:\\项目资料");
+        assert!(normalize_scope_path("D:").len() >= 3);
+    }
 
     #[test]
     fn protected_dirs_rejected() {

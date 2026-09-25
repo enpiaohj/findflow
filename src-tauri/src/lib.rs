@@ -121,17 +121,45 @@ pub fn run() {
                 let _ = state.watch_scope(sid, &path);
             }
 
-            // 全局快捷键（默认 Alt+Space，可在设置中改键）
-            let hotkey: String = state
+            // 全局快捷键：用户设置优先；注册失败沿备用链降级（Alt+Space 与系统菜单键及
+            // uTools/PowerToys 等普遍冲突），最终生效键回写设置供界面显示
+            let user_hotkey: Option<String> = state
                 .db
-                .get_or("ui.hotkey", serde_json::json!("Alt+Space"))
-                .as_str()
-                .unwrap_or("Alt+Space")
-                .to_string();
-            if let Ok(sc) = hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-                app.global_shortcut().register(sc).ok();
+                .get("ui.hotkey")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            let mut candidates: Vec<String> = Vec::new();
+            if let Some(u) = &user_hotkey {
+                candidates.push(u.clone());
             }
-            app.manage(HotkeyState(std::sync::Mutex::new(hotkey)));
+            candidates.push("Alt+Q".into());
+            candidates.push("Ctrl+Alt+Space".into());
+            candidates.push("Ctrl+Shift+Space".into());
+            let gs = app.global_shortcut();
+            let mut active: Option<String> = None;
+            for candidate in &candidates {
+                if let Ok(sc) = candidate.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                    if gs.register(sc).is_ok() {
+                        active = Some(candidate.clone());
+                        break;
+                    }
+                    tracing::warn!("快捷键 {} 注册失败（可能被其他程序占用）", candidate);
+                }
+            }
+            match &active {
+                Some(active_key) => {
+                    let _ = state.db.set("ui.hotkeyActive", &serde_json::json!(active_key));
+                    if user_hotkey.is_none() {
+                        let _ = state.db.set("ui.hotkey", &serde_json::json!(active_key));
+                    }
+                    app.manage(HotkeyState(std::sync::Mutex::new(active_key.clone())));
+                }
+                None => {
+                    tracing::error!("所有备用快捷键均注册失败，应用仍可通过任务栏/直接运行使用");
+                    app.manage(HotkeyState(std::sync::Mutex::new(String::new())));
+                }
+            }
 
             app.manage(state);
             Ok(())
@@ -227,6 +255,7 @@ pub fn run() {
 }
 
 pub mod hotkey {
+    use tauri::Manager;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     /// 改键即时生效：解绑旧键、注册新键；失败自动恢复旧键（FR01 异常闭环）。
@@ -249,6 +278,9 @@ pub mod hotkey {
             Ok(()) => {
                 *state.0.lock().unwrap() = new_hotkey.clone();
                 crate::settings::persist_hotkey(&app, &new_hotkey);
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.eval("window.dispatchEvent(new CustomEvent('hotkey-changed'))");
+                }
                 Ok(())
             }
             Err(e) => {

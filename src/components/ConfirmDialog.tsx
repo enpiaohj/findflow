@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface ConfirmState {
   message: string;
@@ -10,6 +10,18 @@ interface ConfirmState {
 export function useConfirm() {
   const [state, setState] = useState<ConfirmState | null>(null);
 
+  useEffect(() => {
+    if (!state) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        state.resolve(false);
+        setState(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state]);
+
   const confirm = (message: string, sub?: string) =>
     new Promise<boolean>((resolve) => setState({ message, sub, resolve }));
 
@@ -20,6 +32,7 @@ export function useConfirm() {
         {state.sub ? <p className="muted">{state.sub}</p> : null}
         <div className="trial-actions" style={{ justifyContent: "flex-end" }}>
           <button
+            type="button"
             onClick={() => {
               state.resolve(false);
               setState(null);

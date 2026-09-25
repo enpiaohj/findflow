@@ -13,13 +13,20 @@ import {
 
 export function AppearancePage({ notice }: PageCtx) {
   const [density, setDensity] = useState("compact");
-  const [hotkey, setHotkey] = useState("Alt+Space");
-  const [hotkeyCommitted, setHotkeyCommitted] = useState("Alt+Space");
+  const [hotkey, setHotkey] = useState("Alt+Q");
+  const [hotkeyCommitted, setHotkeyCommitted] = useState("");
   const [blurHide, setBlurHide] = useState(true);
 
   useEffect(() => {
     getSetting<string>("ui.density").then((v) => v && setDensity(v)).catch(() => undefined);
-    getSetting<string>("ui.hotkey").then((v) => { if (v) { setHotkey(v); setHotkeyCommitted(v); } }).catch(() => undefined);
+    getSetting<string>("ui.hotkeyActive")
+      .then((v) => {
+        if (v) {
+          setHotkey(v);
+          setHotkeyCommitted(v);
+        }
+      })
+      .catch(() => undefined);
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
   }, []);
 
@@ -47,7 +54,7 @@ export function AppearancePage({ notice }: PageCtx) {
         <div className="toggle-row">
           <div>
             <b>全局快捷键</b>
-            <p className="muted">呼出/隐藏搜索窗。修改后重启应用生效；与 PowerToys 等冲突时请改用其他组合</p>
+            <p className="muted">呼出/隐藏搜索窗，保存后立即生效；与 PowerToys、uTools 等冲突时请换其他组合</p>
           </div>
           <input
             value={hotkey}

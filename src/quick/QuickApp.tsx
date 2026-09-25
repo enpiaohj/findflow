@@ -53,6 +53,7 @@ export default function QuickApp() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hotkey, setHotkey] = useState("Alt+Q");
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -69,6 +70,11 @@ export default function QuickApp() {
     getSetting<string>(DENSITY_KEY)
       .then((v) => {
         if (v === "compact" || v === "comfortable" || v === "large") setDensity(v);
+      })
+      .catch(() => undefined);
+    getSetting<string>("ui.hotkeyActive")
+      .then((v) => {
+        if (v) setHotkey(v);
       })
       .catch(() => undefined);
   }, []);
@@ -191,6 +197,10 @@ export default function QuickApp() {
         } else {
           void getCurrentWindow().hide();
         }
+      } else if (event.key === "," && (event.ctrlKey || event.metaKey)) {
+        // Ctrl+, 打开设置（设计文档 §3.4 键盘闭环）
+        event.preventDefault();
+        setSettingsOpen(true);
       } else if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         inputRef.current?.focus();
@@ -283,7 +293,7 @@ export default function QuickApp() {
                 </div>
               ) : null}
             </div>
-            <span className="searchbar-kbd">Alt + Space</span>
+            <span className="searchbar-kbd">{hotkey}</span>
           </div>
           <FilterBar
             filter={filter}

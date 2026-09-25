@@ -134,4 +134,5 @@ pub fn persist_hotkey(app: &tauri::AppHandle, hotkey: &str) {
     use tauri::Manager;
     let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     let _ = state.db.set("ui.hotkey", &serde_json::json!(hotkey));
+    let _ = state.db.set("ui.hotkeyActive", &serde_json::json!(hotkey));
 }
