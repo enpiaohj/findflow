@@ -240,7 +240,19 @@ export default function QuickApp() {
       <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen ? (
         <>
-          <div className="settings-top">
+          <div
+            className="settings-top"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 16px",
+              borderBottom: "1px solid #e5e7eb",
+              background: "#ffffff",
+              boxSizing: "border-box",
+              width: "100%",
+            }}
+          >
             <b>设置</b>
             <button className="settings-back" onClick={() => setSettingsOpen(false)}>
               返回搜索（Esc）
