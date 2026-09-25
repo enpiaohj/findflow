@@ -260,11 +260,17 @@ fn walk_dir(
 
 pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), String> {
     let db = state.engine.db.clone();
-    let (root, opts_json) = db.with_conn(|c| {
+    let (root, opts_json, files_est) = db.with_conn(|c| {
         c.query_row(
-            "SELECT path, options_json FROM scopes WHERE scope_id=?1",
+            "SELECT path, options_json, files_est FROM scopes WHERE scope_id=?1",
             [scope_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            },
         )
         .map_err(|e| e.to_string())
     })?;
@@ -273,7 +279,7 @@ pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), Stri
     state.engine.start(
         "initial_scan",
         serde_json::json!({"scopeId": scope_id, "path": root}),
-        move |ctx| run_initial_scan(ctx, db_for_body, scope_id, root, opts),
+        move |ctx| run_initial_scan(ctx, db_for_body, scope_id, root, opts, files_est),
     )?;
     state.db.with_conn(|c| {
         c.execute("UPDATE scopes SET state='scanning' WHERE scope_id=?1", [scope_id])
@@ -288,6 +294,7 @@ fn run_initial_scan(
     scope_id: i64,
     root: String,
     opts: ScopeOptions,
+    files_est: Option<i64>,
 ) {
     // 流式扫描：边遍历边写库，内存恒定、进度实时
     let mut done = 0f64;
@@ -314,7 +321,21 @@ fn run_initial_scan(
             tracing::warn!("扫描批次写入失败: {e}");
         }
         done += fixed.len() as f64;
-        ctx.progress(0.0, &format!("已索引 {} 项", done as u64));
+        // 有试扫预估则显示百分比，否则仅报计数
+        let ratio = files_est
+            .filter(|e| *e > 0)
+            .map(|e| (done / e as f64).min(0.99))
+            .unwrap_or(0.0);
+        ctx.progress(
+            ratio,
+            &format!(
+                "已索引 {} 项{}",
+                done as u64,
+                files_est
+                    .map(|e| format!("（约 {} 项）", e))
+                    .unwrap_or_default()
+            ),
+        );
     });
     db.with_conn(|c| {
         c.execute(

@@ -109,6 +109,7 @@ pub fn scope_add(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     path: String,
     options: Option<serde_json::Value>,
+    files_est: Option<i64>,
 ) -> Result<crate::models::ScopeInfo, String> {
     let path = normalize_scope_path(&path);
     if path.len() < 3 || !path.chars().nth(1).map(|c| c == ':').unwrap_or(false) {
@@ -125,8 +126,8 @@ pub fn scope_add(
         .db
         .with_conn(|c| {
             c.execute(
-                "INSERT OR IGNORE INTO scopes(path, options_json, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![path, opts.to_string(), util::now_rfc3339()],
+                "INSERT OR IGNORE INTO scopes(path, options_json, files_est, added_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![path, opts.to_string(), files_est, util::now_rfc3339()],
             )
                 .map_err(|e| e.to_string())?;
             Ok::<i64, String>(c.last_insert_rowid())

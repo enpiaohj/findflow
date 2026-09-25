@@ -137,6 +137,8 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX idx_outbox_pending ON index_outbox(state);
     ",
+    // v2：范围预估文件数（试扫确认值，用于扫描进度百分比）
+    "ALTER TABLE scopes ADD COLUMN files_est INTEGER;"
 ];
 
 pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {

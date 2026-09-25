@@ -94,8 +94,11 @@ export const llmSetKey = (key: string): Promise<void> => invoke("llm_set_key", {
 export const llmClearKey = (): Promise<void> => invoke("llm_clear_key");
 
 export const scopesList = (): Promise<ScopeInfo[]> => invoke("scopes_list");
-export const scopeAdd = (path: string, options?: unknown): Promise<ScopeInfo> =>
-  invoke("scope_add", { path, options });
+export const scopeAdd = (
+  path: string,
+  options?: unknown,
+  filesEst?: number
+): Promise<ScopeInfo> => invoke("scope_add", { path, options, filesEst: filesEst ?? null });
 export const scopeRemove = (scopeId: number, deleteIndex: boolean): Promise<void> =>
   invoke("scope_remove", { scopeId, deleteIndex });
 export const scopeSetEnabled = (scopeId: number, enabled: boolean): Promise<void> =>

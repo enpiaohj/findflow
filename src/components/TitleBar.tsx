@@ -1,5 +1,7 @@
 import { GearIcon, CloseIcon, MaximizeIcon, MinimizeIcon } from "./Icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
+import { useEffect, useState } from "react";
 
 interface Props {
   onOpenSettings?: () => void;
@@ -7,10 +9,18 @@ interface Props {
 
 export default function TitleBar({ onOpenSettings }: Props) {
   const appWindow = getCurrentWindow();
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => setVersion(v))
+      .catch(() => undefined);
+  }, []);
   return (
     <div className="titlebar" data-tauri-drag-region>
       <img src="/findflow.svg" alt="" className="titlebar-logo" draggable={false} data-tauri-drag-region />
       <span className="titlebar-name" data-tauri-drag-region>FindFlow</span>
+      {version ? <span className="titlebar-version" data-tauri-drag-region>v{version}</span> : null}
       <div className="titlebar-actions">
         <button
           className="titlebar-btn"

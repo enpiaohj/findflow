@@ -743,3 +743,18 @@
   cursor: pointer;
   color: #fff;
 }
+
+/* 不确定进度（遍历阶段无总数） */
+.progress-bar.progress-indeterminate > div {
+  width: 30% !important;
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% {
+    margin-left: -30%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}

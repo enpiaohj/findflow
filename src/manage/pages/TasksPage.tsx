@@ -78,10 +78,19 @@ export default function TasksPage({ notice }: PageCtx) {
               <span className="muted"> {j.message ?? j.state}</span>
             </div>
             <div className="progress-line">
-              <div className="progress-bar">
-                <div style={{ width: `${Math.round(j.progress * 100)}%` }} />
+              <div
+                className={
+                  "progress-bar" +
+                  (j.progress <= 0.01 ? " progress-indeterminate" : "")
+                }
+              >
+                {j.progress <= 0.01 ? null : (
+                  <div style={{ width: `${Math.round(j.progress * 100)}%` }} />
+                )}
               </div>
-              <span className="muted">{Math.round(j.progress * 100)}%</span>
+              <span className="muted">
+                {j.progress <= 0.01 ? (j.message ?? "进行中") : Math.round(j.progress * 100) + "%"}
+              </span>
             </div>
             <div className="scope-actions">
               {j.state === "paused" ? (

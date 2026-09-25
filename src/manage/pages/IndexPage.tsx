@@ -62,7 +62,7 @@ export default function IndexPage({ notice }: PageCtx) {
   const confirmAdd = async () => {
     if (!trial) return;
     try {
-      await scopeAdd(trial.path);
+      await scopeAdd(trial.path, undefined, trial.filesEst);
       notice(`已加入索引并开始扫描：${trial.path}`);
       setTrial(null);
       reload();
