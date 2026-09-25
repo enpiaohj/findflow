@@ -154,70 +154,69 @@ pub fn delete_by_path(c: &Connection, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 目录遍历：受保护目录、隐藏目录、排除规则整树跳过；
-/// 每凑满一批即回调写出（流式，内存恒定，进度实时）。
-fn walk_dir(
-    root: &Path,
+/// 遍历目录树：受保护目录、隐藏目录、排除规则整树跳过。
+///
+/// - `count_only = true`：只统计将入库的条目数（快速，不做文件标识/入库）。
+/// - `count_only = false`：收集元数据并按批回调写出。
+#[allow(clippy::too_many_arguments)]
+fn walk_inner(
+    dir: &Path,
+    depth: usize,
+    excluded: bool,
     opts: &ScopeOptions,
+    count_only: bool,
+    batch: &mut Vec<FileUpsert>,
+    on_batch: &mut impl FnMut(Vec<FileUpsert>),
+    errors: &mut u64,
+    seen: &mut u64,
+    total: &mut u64,
     ctx: Option<&JobContext>,
-    mut on_batch: impl FnMut(Vec<FileUpsert>),
-) -> u64 {
-    let mut errors = 0u64;
-    let mut seen = 0u64;
-    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
-    fn walk_inner(
-        dir: &Path,
-        depth: usize,
-        excluded: bool,
-        opts: &ScopeOptions,
-        batch: &mut Vec<FileUpsert>,
-        on_batch: &mut impl FnMut(Vec<FileUpsert>),
-        errors: &mut u64,
-        seen: &mut u64,
-        ctx: Option<&JobContext>,
-    ) {
-        let read = match std::fs::read_dir(dir) {
-            Ok(r) => r,
-            Err(_) => {
-                *errors += 1;
+) {
+    let read = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => {
+            *errors += 1;
+            return;
+        }
+    };
+    for entry in read.flatten() {
+        if let Some(ctx) = ctx {
+            ctx.wait_if_paused();
+            if ctx.cancelled() {
                 return;
             }
-        };
-        for entry in read.flatten() {
-            if let Some(ctx) = ctx {
-                ctx.wait_if_paused();
-                if ctx.cancelled() {
-                    return;
-                }
-                *seen += 1;
-                if *seen % 1000 == 0 {
-                    // 遍历阶段持续给出反馈，避免看起来像卡死
-                    ctx.progress(0.0, &format!("正在遍历，已发现 {} 项", seen));
-                }
+            *seen += 1;
+            if *seen % 20000 == 0 {
+                // 遍历阶段持续给出反馈，避免看起来像卡死
+                ctx.progress(0.0, &format!("正在遍历，已发现 {} 项", seen));
             }
-            let path = entry.path();
-            let Ok(meta) = std::fs::metadata(&path) else {
-                *errors += 1;
-                continue;
-            };
-            let attrs = {
-                use std::os::windows::fs::MetadataExt;
-                meta.file_attributes()
-            };
-            let name = entry.file_name().to_string_lossy().to_string();
-            let hidden = util::is_hidden(attrs);
-            let child_excluded = excluded
-                || (!opts.include_hidden && hidden)
-                || crate::scope::segment_excluded(&name, opts);
-            if meta.is_dir() {
-                if depth > 0
-                    && (child_excluded
-                        || crate::scope::is_protected(&util::normalize_path(&path))
-                        || name.starts_with('$'))
-                {
-                    continue; // 整树跳过
-                }
-                if depth > 0 && !child_excluded {
+        }
+        let path = entry.path();
+        let Ok(meta) = std::fs::metadata(&path) else {
+            *errors += 1;
+            continue;
+        };
+        let attrs = {
+            use std::os::windows::fs::MetadataExt;
+            meta.file_attributes()
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        let hidden = util::is_hidden(attrs);
+        let child_excluded = excluded
+            || (!opts.include_hidden && hidden)
+            || crate::scope::segment_excluded(&name, opts);
+        if meta.is_dir() {
+            if depth > 0
+                && (child_excluded
+                    || crate::scope::is_protected(&util::normalize_path(&path))
+                    || name.starts_with('$'))
+            {
+                continue; // 整树跳过
+            }
+            if depth > 0 && !child_excluded {
+                if count_only {
+                    *total += 1;
+                } else {
                     let mut u = stat_entry(&path, 0, opts);
                     if let Some(uu) = &mut u {
                         uu.kind = "folder".into();
@@ -229,27 +228,82 @@ fn walk_dir(
                         batch.push(uu);
                     }
                 }
-                walk_inner(&path, depth + 1, child_excluded, opts, batch, on_batch, errors, seen, ctx);
-            } else if !child_excluded {
-                if let Some(mut u) = stat_entry(&path, 0, opts) {
-                    u.scope_id = 0;
-                    batch.push(u);
-                }
             }
-            if batch.len() >= 500 {
-                on_batch(std::mem::take(batch));
+            walk_inner(
+                &path,
+                depth + 1,
+                child_excluded,
+                opts,
+                count_only,
+                batch,
+                on_batch,
+                errors,
+                seen,
+                total,
+                ctx,
+            );
+        } else if !child_excluded {
+            if count_only {
+                *total += 1;
+            } else if let Some(mut u) = stat_entry(&path, 0, opts) {
+                u.scope_id = 0;
+                batch.push(u);
             }
         }
+        if !count_only && batch.len() >= 500 {
+            on_batch(std::mem::take(batch));
+        }
     }
+}
+
+/// 阶段一：快速统计范围总数（仅枚举目录项，不打开文件取标识）。
+fn count_dir(root: &Path, opts: &ScopeOptions, ctx: Option<&JobContext>) -> (u64, u64) {
+    let mut errors = 0u64;
+    let mut seen = 0u64;
+    let mut total = 0u64;
+    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
+    let mut on_batch = |_: Vec<FileUpsert>| {};
     walk_inner(
         root,
         0,
         false,
         opts,
+        true,
         &mut batch,
         &mut on_batch,
         &mut errors,
         &mut seen,
+        &mut total,
+        ctx,
+    );
+    if !batch.is_empty() {
+        on_batch(batch);
+    }
+    (total, errors)
+}
+
+/// 阶段二：流式收集元数据，每凑满一批即回调写出。
+fn walk_dir(
+    root: &Path,
+    opts: &ScopeOptions,
+    ctx: Option<&JobContext>,
+    mut on_batch: impl FnMut(Vec<FileUpsert>),
+) -> u64 {
+    let mut errors = 0u64;
+    let mut seen = 0u64;
+    let mut total = 0u64;
+    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
+    walk_inner(
+        root,
+        0,
+        false,
+        opts,
+        false,
+        &mut batch,
+        &mut on_batch,
+        &mut errors,
+        &mut seen,
+        &mut total,
         ctx,
     );
     if !batch.is_empty() {
@@ -260,17 +314,11 @@ fn walk_dir(
 
 pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), String> {
     let db = state.engine.db.clone();
-    let (root, opts_json, files_est) = db.with_conn(|c| {
+    let (root, opts_json) = db.with_conn(|c| {
         c.query_row(
-            "SELECT path, options_json, files_est FROM scopes WHERE scope_id=?1",
+            "SELECT path, options_json FROM scopes WHERE scope_id=?1",
             [scope_id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<i64>>(2)?,
-                ))
-            },
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
         )
         .map_err(|e| e.to_string())
     })?;
@@ -278,8 +326,8 @@ pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), Stri
     let db_for_body = db.clone();
     state.engine.start(
         "initial_scan",
-        serde_json::json!({"scopeId": scope_id, "path": root}),
-        move |ctx| run_initial_scan(ctx, db_for_body, scope_id, root, opts, files_est),
+        serde_json::json!({ "scopeId": scope_id, "path": root }),
+        move |ctx| run_initial_scan(ctx, db_for_body, scope_id, root, opts),
     )?;
     state.db.with_conn(|c| {
         c.execute("UPDATE scopes SET state='scanning' WHERE scope_id=?1", [scope_id])
@@ -294,49 +342,64 @@ fn run_initial_scan(
     scope_id: i64,
     root: String,
     opts: ScopeOptions,
-    files_est: Option<i64>,
 ) {
-    // 流式扫描：边遍历边写库，内存恒定、进度实时
+    // 阶段一：快速统计总数（准确进度的分母；仅枚举目录项，远快于正式扫描）
+    ctx.progress(0.0, "正在统计文件数量…");
+    let (total, count_errors) = count_dir(Path::new(&root), &opts, Some(&ctx));
+    if ctx.cancelled() {
+        ctx.finish_cancelled();
+        db.with_conn(|c| {
+            c.execute("UPDATE scopes SET state='idle' WHERE scope_id=?1", [scope_id])
+                .ok();
+        });
+        return;
+    }
+    if total == 0 {
+        db.with_conn(|c| {
+            c.execute(
+                "UPDATE scopes SET state='idle', baseline_at=?2, last_scan_ms=?3 WHERE scope_id=?1",
+                params![scope_id, util::now_rfc3339(), util::now_ms()],
+            )
+            .ok();
+        });
+        ctx.finish_ok(Some(
+            serde_json::json!({ "scopeId": scope_id, "indexed": 0, "errors": count_errors, "path": root })
+                .to_string(),
+        ));
+        return;
+    }
+
+    // 阶段二：流式扫描，进度 = 已索引 / 准确总数，百分比稳定不跳
     let mut done = 0f64;
-    let mut failed = 0u64;
-    let _errors = walk_dir(Path::new(&root), &opts, Some(&ctx), |batch| {
+    let mut failed = count_errors;
+    let walk_errors = walk_dir(Path::new(&root), &opts, Some(&ctx), |mut batch| {
         ctx.wait_if_paused();
-        let fixed: Vec<FileUpsert> = batch
-            .into_iter()
-            .map(|mut u| {
-                u.scope_id = scope_id;
-                u
-            })
-            .collect();
+        if ctx.cancelled() {
+            return;
+        }
+        for u in &mut batch {
+            u.scope_id = scope_id;
+        }
         if let Err(e) = db.with_conn(|c| {
             c.execute("BEGIN IMMEDIATE", []).ok();
-            if let Err(e) = upsert_batch(c, &fixed) {
+            if let Err(e) = upsert_batch(c, &batch) {
                 c.execute("ROLLBACK", []).ok();
                 return Err(e);
             }
             c.execute("COMMIT", []).map_err(|e| e.to_string())?;
             Ok::<(), String>(())
         }) {
-            failed += fixed.len() as u64;
+            failed += batch.len() as u64;
             tracing::warn!("扫描批次写入失败: {e}");
         }
-        done += fixed.len() as f64;
-        // 有试扫预估则显示百分比，否则仅报计数
-        let ratio = files_est
-            .filter(|e| *e > 0)
-            .map(|e| (done / e as f64).min(0.99))
-            .unwrap_or(0.0);
+        done += batch.len() as f64;
         ctx.progress(
-            ratio,
-            &format!(
-                "已索引 {} 项{}",
-                done as u64,
-                files_est
-                    .map(|e| format!("（约 {} 项）", e))
-                    .unwrap_or_default()
-            ),
+            (done / total as f64).min(0.99),
+            &format!("已索引 {} / {} 项", done as u64, total),
         );
     });
+    failed += walk_errors;
+
     db.with_conn(|c| {
         c.execute(
             "UPDATE scopes SET state='idle', baseline_at=?2, last_scan_ms=?3 WHERE scope_id=?1",
@@ -345,7 +408,7 @@ fn run_initial_scan(
         .ok();
     });
     ctx.finish_ok(Some(
-        serde_json::json!({"scopeId": scope_id, "indexed": done as u64, "errors": failed, "path": root})
+        serde_json::json!({ "scopeId": scope_id, "indexed": done as u64, "errors": failed, "path": root })
             .to_string(),
     ));
 }
@@ -365,7 +428,7 @@ pub fn start_recalibrate_job(state: &crate::AppState, scope_id: i64) -> Result<(
     let db_for_body = db.clone();
     state.engine.start(
         "recalibrate",
-        serde_json::json!({"scopeId": scope_id}),
+        serde_json::json!({ "scopeId": scope_id }),
         move |ctx| run_recalibrate(ctx, db_for_body, scope_id, root, opts),
     )?;
     Ok(())
@@ -398,6 +461,7 @@ fn run_recalibrate(
         });
         ctx.progress(0.0, &format!("校准对比中，已核对 {} 项", rec_done as u64));
     });
+
     let all_paths: Vec<String> = db
         .with_conn(|c| {
             let mut stmt = c
@@ -432,7 +496,7 @@ fn run_recalibrate(
         .ok();
     });
     ctx.finish_ok(Some(
-        serde_json::json!({"scopeId": scope_id, "removed": removed_count, "errors": errors}).to_string(),
+        serde_json::json!({ "scopeId": scope_id, "removed": removed_count, "errors": errors }).to_string(),
     ));
 }
 
@@ -450,16 +514,16 @@ pub fn start_rebuild_job(state: &crate::AppState, scope_id: i64) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn cmd_scan(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_scan(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
     start_scan_job(&state, scope_id)
 }
 
 #[tauri::command]
-pub fn cmd_recalibrate(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_recalibrate(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
     start_recalibrate_job(&state, scope_id)
 }
 
 #[tauri::command]
-pub fn cmd_rebuild(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, scope_id: i64) -> Result<(), String> {
+pub fn cmd_rebuild(state: tauri::State<'_, crate::AppState>, scope_id: i64) -> Result<(), String> {
     start_rebuild_job(&state, scope_id)
 }

@@ -314,3 +314,28 @@ pub fn job_retry_failed(store: tauri::State<'_, std::sync::Arc<crate::AppState>>
     }
     Err("该任务类型暂不支持自动重试".into())
 }
+
+/// 主搜索窗索引进度（仅返回运行中的初始扫描；完成/无任务返回 None）。
+#[tauri::command]
+pub fn scan_status(
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Option<crate::models::ScanProgress>, String> {
+    store.db.with_conn(|c| {
+        let row = c
+            .query_row(
+                "SELECT progress, message, state FROM jobs
+                 WHERE kind='initial_scan' AND state IN ('waiting','running','paused')
+                 ORDER BY job_id DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok(crate::models::ScanProgress {
+                        progress: r.get(0)?,
+                        message: r.get(1)?,
+                        state: r.get(2)?,
+                    })
+                },
+            )
+            .ok();
+        Ok(row)
+    })
+}

@@ -129,6 +129,14 @@ export const organizeSuggest = (
 export const organizeExecute = (items: PlanItem[]): Promise<{ ok: number; failed: number }> =>
   invoke("organize_execute", { items });
 
+export interface ScanProgress {
+  progress: number;
+  message: string | null;
+  state: string;
+}
+
+export const scanStatus = (): Promise<ScanProgress | null> => invoke("scan_status");
+
 export const jobsList = (limit?: number): Promise<JobInfo[]> => invoke("jobs_list", { limit: limit ?? 50 });
 export const jobPause = (jobId: number): Promise<void> => invoke("job_pause", { jobId });
 export const jobResume = (jobId: number): Promise<void> => invoke("job_resume", { jobId });

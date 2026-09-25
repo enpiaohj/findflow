@@ -137,92 +137,6 @@ export default function QuickApp() {
     setSelectedIndex(0);
   }, [query, filter, sort]);
 
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      // 中文输入法合成期间（选候选词）不拦截任何按键
-      if (event.nativeEvent.isComposing) return;
-      if (settingsOpen) {
-        if (event.key === "Escape") setSettingsOpen(false);
-        return;
-      }
-      if (menuFor) {
-        if (event.key === "Escape") setMenuFor(null);
-        return;
-      }
-      if (previewPath) {
-        if (event.key === "Escape" || event.key === " ") {
-          event.preventDefault();
-          setPreviewPath(null);
-        }
-        return;
-      }
-      const inputEl = inputRef.current;
-      const typing = document.activeElement === inputEl;
-      const hasTextSelection =
-        typing &&
-        inputEl !== null &&
-        inputEl.selectionStart !== null &&
-        inputEl.selectionEnd !== null &&
-        inputEl.selectionStart !== inputEl.selectionEnd;
-
-      if (event.key === "ArrowDown" && items.length > 0) {
-        event.preventDefault();
-        setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSelectedIndex((index) => Math.max(index - 1, 0));
-      } else if (event.key === "Enter" && !hasTextSelection) {
-        event.preventDefault();
-        const it = items[selectedIndex];
-        if (!it) return;
-        if (event.ctrlKey) {
-          actionLocate(it.path)
-            .then((m) => notice(m))
-            .catch((e) => notice(String(e)));
-        } else {
-          const target = it.path;
-          void getCurrentWindow().hide();
-          actionOpen(target)
-            .then(() => notice("已打开 " + target.split("\\").pop()))
-            .catch((e) => notice(String(e)));
-        }
-      } else if (event.key === " " && !typing) {
-        event.preventDefault();
-        const it = items[selectedIndex];
-        if (it) setPreviewPath(it.path);
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        if (query) {
-          setQuery("");
-        } else {
-          void getCurrentWindow().hide();
-        }
-      } else if (event.key === "," && (event.ctrlKey || event.metaKey)) {
-        // Ctrl+, 打开设置（设计文档 §3.4 键盘闭环）
-        event.preventDefault();
-        setSettingsOpen(true);
-      } else if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      } else if (event.key === "c" && (event.ctrlKey || event.metaKey) && !hasTextSelection) {
-        const it = items[selectedIndex];
-        if (!it) return;
-        event.preventDefault();
-        if (event.shiftKey) {
-          actionCopyFiles([it.path])
-            .then((m) => notice(m))
-            .catch((e) => notice(String(e)));
-        } else {
-          actionCopyPath(it.path, "full")
-            .then((m) => notice(m))
-            .catch((e) => notice(String(e)));
-        }
-      }
-    },
-    [items, selectedIndex, query, previewPath, menuFor, settingsOpen, notice]
-  );
-
   return (
     <div
       className="app"
@@ -315,6 +229,12 @@ export default function QuickApp() {
           <div className="result-status">
             {`共 ${items.length} 项 · 索引 ${total} 条 · ${elapsed} ms`}
           </div>
+              </div>
+              <span className="scan-strip-text">
+                {scan.message ?? "正在索引"} · {Math.max(1, Math.round(scan.progress * 100)) + "%"}
+              </span>
+            </div>
+          ) : null}
           <ResultList
             items={items}
             density={density}

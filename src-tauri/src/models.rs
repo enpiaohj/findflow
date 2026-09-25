@@ -217,3 +217,11 @@ pub struct IndexHealth {
     pub scopes: Vec<ScopeInfo>,
     pub last_checkpoint_ms: i64,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    pub progress: f64,
+    pub message: Option<String>,
+    pub state: String,
+}

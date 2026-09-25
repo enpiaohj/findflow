@@ -241,6 +241,7 @@ pub fn run() {
             jobs::job_resume,
             jobs::job_cancel,
             jobs::job_retry_failed,
+            jobs::scan_status,
             diagnostics::diagnostics_health,
             diagnostics::diagnostics_failures,
             diagnostics::diagnostics_export,
