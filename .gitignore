@@ -28,3 +28,5 @@ releases/**/*.pkg
 releases/**/*.AppImage
 releases/**/*.deb
 releases/**/*.rpm
+
+ff-desktop.png
