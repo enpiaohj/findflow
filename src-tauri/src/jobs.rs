@@ -86,7 +86,7 @@ impl JobEngine {
                     use windows::Win32::System::Threading::{
                         SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
                     };
-                    SetThreadPriority(
+                    let _ = SetThreadPriority(
                         windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
                         THREAD_PRIORITY_BELOW_NORMAL,
                     );

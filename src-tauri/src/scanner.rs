@@ -154,22 +154,24 @@ pub fn delete_by_path(c: &Connection, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 目录遍历：受保护目录、隐藏目录、排除规则整树跳过。
+/// 目录遍历：受保护目录、隐藏目录、排除规则整树跳过；
+/// 每凑满一批即回调写出（流式，内存恒定，进度实时）。
 fn walk_dir(
     root: &Path,
     opts: &ScopeOptions,
     ctx: Option<&JobContext>,
-) -> (Vec<FileUpsert>, u64) {
-    let mut items = Vec::new();
+    mut on_batch: impl FnMut(Vec<FileUpsert>),
+) -> u64 {
     let mut errors = 0u64;
     let mut seen = 0u64;
-    // 遍历时携带"父级是否被排除"信息，实现整树跳过。
+    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
     fn walk_inner(
         dir: &Path,
         depth: usize,
         excluded: bool,
         opts: &ScopeOptions,
-        items: &mut Vec<FileUpsert>,
+        batch: &mut Vec<FileUpsert>,
+        on_batch: &mut impl FnMut(Vec<FileUpsert>),
         errors: &mut u64,
         seen: &mut u64,
         ctx: Option<&JobContext>,
@@ -224,20 +226,36 @@ fn walk_dir(
                         uu.size = 0;
                     }
                     if let Some(uu) = u {
-                        items.push(uu);
+                        batch.push(uu);
                     }
                 }
-                walk_inner(&path, depth + 1, child_excluded, opts, items, errors, seen, ctx);
+                walk_inner(&path, depth + 1, child_excluded, opts, batch, on_batch, errors, seen, ctx);
             } else if !child_excluded {
                 if let Some(mut u) = stat_entry(&path, 0, opts) {
                     u.scope_id = 0;
-                    items.push(u);
+                    batch.push(u);
                 }
+            }
+            if batch.len() >= 500 {
+                on_batch(std::mem::take(batch));
             }
         }
     }
-    walk_inner(root, 0, false, opts, &mut items, &mut errors, &mut seen, ctx);
-    (items, errors)
+    walk_inner(
+        root,
+        0,
+        false,
+        opts,
+        &mut batch,
+        &mut on_batch,
+        &mut errors,
+        &mut seen,
+        ctx,
+    );
+    if !batch.is_empty() {
+        on_batch(batch);
+    }
+    errors
 }
 
 pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), String> {
@@ -271,26 +289,18 @@ fn run_initial_scan(
     root: String,
     opts: ScopeOptions,
 ) {
-    let (items, errors) = walk_dir(Path::new(&root), &opts, Some(&ctx));
-    let total = items.len() as f64;
+    // 流式扫描：边遍历边写库，内存恒定、进度实时
     let mut done = 0f64;
-    let mut failed = errors;
-    for chunk in items.chunks(500) {
-        if ctx.cancelled() {
-            ctx.finish_cancelled();
-            db.with_conn(|c| {
-                c.execute("UPDATE scopes SET state='idle' WHERE scope_id=?1", [scope_id])
-                    .ok();
-            });
-            return;
-        }
+    let mut failed = 0u64;
+    let _errors = walk_dir(Path::new(&root), &opts, Some(&ctx), |batch| {
         ctx.wait_if_paused();
-        let mut fixed: Vec<FileUpsert> = Vec::with_capacity(chunk.len());
-        for u in chunk {
-            let mut u = u.clone();
-            u.scope_id = scope_id;
-            fixed.push(u);
-        }
+        let fixed: Vec<FileUpsert> = batch
+            .into_iter()
+            .map(|mut u| {
+                u.scope_id = scope_id;
+                u
+            })
+            .collect();
         if let Err(e) = db.with_conn(|c| {
             c.execute("BEGIN IMMEDIATE", []).ok();
             if let Err(e) = upsert_batch(c, &fixed) {
@@ -304,8 +314,8 @@ fn run_initial_scan(
             tracing::warn!("扫描批次写入失败: {e}");
         }
         done += fixed.len() as f64;
-        ctx.progress(done / total.max(1.0), &format!("已索引 {} 项", done as u64));
-    }
+        ctx.progress(0.0, &format!("已索引 {} 项", done as u64));
+    });
     db.with_conn(|c| {
         c.execute(
             "UPDATE scopes SET state='idle', baseline_at=?2, last_scan_ms=?3 WHERE scope_id=?1",
@@ -347,27 +357,26 @@ fn run_recalibrate(
     root: String,
     opts: ScopeOptions,
 ) {
-    let (items, errors) = walk_dir(Path::new(&root), &opts, Some(&ctx));
     let mut disk_paths = std::collections::HashSet::new();
-    for chunk in items.chunks(500) {
+    let mut rec_done = 0f64;
+    let errors = walk_dir(Path::new(&root), &opts, Some(&ctx), |batch| {
         if ctx.cancelled() {
-            ctx.finish_cancelled();
             return;
         }
-        let mut fixed: Vec<FileUpsert> = Vec::with_capacity(chunk.len());
-        for u in chunk {
-            let mut u = u.clone();
+        let mut fixed: Vec<FileUpsert> = Vec::with_capacity(batch.len());
+        for mut u in batch {
             u.scope_id = scope_id;
             disk_paths.insert(u.path.clone());
             fixed.push(u);
         }
+        rec_done += fixed.len() as f64;
         let _ = db.with_conn(|c| {
             c.execute("BEGIN IMMEDIATE", []).ok();
             let _ = upsert_batch(c, &fixed);
             c.execute("COMMIT", []).ok();
         });
-        ctx.progress(0.5, "对比磁盘与索引");
-    }
+        ctx.progress(0.0, &format!("校准对比中，已核对 {} 项", rec_done as u64));
+    });
     let all_paths: Vec<String> = db
         .with_conn(|c| {
             let mut stmt = c

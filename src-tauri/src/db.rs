@@ -160,6 +160,9 @@ fn configure(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    // 读性能：页缓存 8MB + mmap 256MB（WAL 模式下安全）
+    conn.pragma_update(None, "cache_size", -8000)?;
+    conn.pragma_update(None, "mmap_size", 268_435_456)?;
     Ok(())
 }
 

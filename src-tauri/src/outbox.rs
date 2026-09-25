@@ -13,6 +13,7 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
+            let mut last_commit = std::time::Instant::now() - Duration::from_secs(10);
             let batch = state.db.with_conn(|c| -> Result<Vec<(i64, i64, String)>, String> {
                 let mut stmt = c
                     .prepare(
@@ -28,7 +29,7 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
             });
             match batch {
                 Ok(events) if events.is_empty() => {
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(Duration::from_millis(250));
                 }
                 Ok(events) => {
                     for (event_id, fid, op) in &events {
@@ -41,8 +42,12 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
                             .ok();
                         });
                     }
-                    let _ = state.index.commit();
-                    state.index.reload();
+                    // 提交批量化：满批立即提交；不满批时隔 2 秒再提交，减少扫描期小段与合并压力
+                    if events.len() >= 400 || last_commit.elapsed() >= Duration::from_secs(2) {
+                        let _ = state.index.commit();
+                        state.index.reload();
+                        last_commit = std::time::Instant::now();
+                    }
                 }
                 Err(_) => std::thread::sleep(Duration::from_millis(1000)),
             }
