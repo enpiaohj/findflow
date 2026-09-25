@@ -250,7 +250,7 @@ fn walk_inner(
                 batch.push(u);
             }
         }
-        if !count_only && batch.len() >= 500 {
+        if !count_only && batch.len() >= 200 {
             on_batch(std::mem::take(batch));
         }
     }
@@ -261,7 +261,7 @@ fn count_dir(root: &Path, opts: &ScopeOptions, ctx: Option<&JobContext>) -> (u64
     let mut errors = 0u64;
     let mut seen = 0u64;
     let mut total = 0u64;
-    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
+    let mut batch: Vec<FileUpsert> = Vec::with_capacity(200);
     let mut on_batch = |_: Vec<FileUpsert>| {};
     walk_inner(
         root,
@@ -292,7 +292,7 @@ fn walk_dir(
     let mut errors = 0u64;
     let mut seen = 0u64;
     let mut total = 0u64;
-    let mut batch: Vec<FileUpsert> = Vec::with_capacity(500);
+    let mut batch: Vec<FileUpsert> = Vec::with_capacity(200);
     walk_inner(
         root,
         0,
@@ -397,6 +397,8 @@ fn run_initial_scan(
             (done / total as f64).min(0.99),
             &format!("已索引 {} / {} 项", done as u64, total),
         );
+        // 批间让出：给界面命令获取数据库锁的机会，避免无响应
+        std::thread::sleep(std::time::Duration::from_millis(8));
     });
     failed += walk_errors;
 
@@ -460,6 +462,7 @@ fn run_recalibrate(
             c.execute("COMMIT", []).ok();
         });
         ctx.progress(0.0, &format!("校准对比中，已核对 {} 项", rec_done as u64));
+        std::thread::sleep(std::time::Duration::from_millis(5));
     });
 
     let all_paths: Vec<String> = db

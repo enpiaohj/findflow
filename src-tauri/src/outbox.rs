@@ -32,22 +32,30 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
                     std::thread::sleep(Duration::from_millis(250));
                 }
                 Ok(events) => {
+                    let mut done_ids: Vec<i64> = Vec::with_capacity(events.len());
                     for (event_id, fid, op) in &events {
                         apply_event(&state, *fid, op);
+                        done_ids.push(*event_id);
+                    }
+                    // 单条语句批量删除已应用事件，减少持锁次数
+                    if !done_ids.is_empty() {
+                        let list = done_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
                         state.db.with_conn(|c| {
                             c.execute(
-                                "DELETE FROM index_outbox WHERE event_id=?1",
-                                params![event_id],
+                                &format!("DELETE FROM index_outbox WHERE event_id IN ({})", list),
+                                [],
                             )
                             .ok();
                         });
                     }
-                    // 提交批量化：满批立即提交；不满批时隔 2 秒再提交，减少扫描期小段与合并压力
+                    // 提交批量化：满批立即提交；不满批时隔 2 秒再提交
                     if events.len() >= 400 || last_commit.elapsed() >= Duration::from_secs(2) {
                         let _ = state.index.commit();
                         state.index.reload();
                         last_commit = std::time::Instant::now();
                     }
+                    // 批间让出，避免饿死界面命令
+                    std::thread::sleep(Duration::from_millis(3));
                 }
                 Err(_) => std::thread::sleep(Duration::from_millis(1000)),
             }

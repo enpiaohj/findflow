@@ -18,6 +18,7 @@ import {
   actionLocate,
   actionCopyPath,
   actionCopyFiles,
+  scanStatus,
   type FileRow,
 } from "../api";
 import type { Density } from "../types";
@@ -58,7 +59,6 @@ export default function QuickApp() {
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
   const searchGen = useRef(0);
-  const mousePos = useRef({ x: 0, y: 0 });
 
   const notice = useCallback((message: string) => {
     setToast(message);
@@ -101,11 +101,6 @@ export default function QuickApp() {
     return () => void unlistenP.then((f) => f());
   }, []);
 
-  // 设置视图打开期间暂停“失焦自动隐藏”，避免选目录等系统对话框打断流程
-  useEffect(() => {
-    setSetting("ui.settingsOpen", settingsOpen).catch(() => undefined);
-  }, [settingsOpen]);
-
   const changeDensity = useCallback((next: Density) => {
     setDensity(next);
     setSetting(DENSITY_KEY, next).catch(() => undefined);
@@ -137,39 +132,115 @@ export default function QuickApp() {
     setSelectedIndex(0);
   }, [query, filter, sort]);
 
-  return (
-    <div
-      className="app"
-      onKeyDown={onKeyDown}
-      onMouseMove={(e) => {
-        mousePos.current = { x: e.clientX, y: e.clientY };
-      }}
-      onContextMenu={(e) => {
-        // 右键任意结果行 = 打开该行菜单（若命中行则先选中）
-        const target = (e.target as HTMLElement).closest(".result-row") as HTMLElement | null;
-        if (!target) return;
-        e.preventDefault();
-        const row = [...(target.parentElement?.children ?? [])].indexOf(target);
-        if (row >= 0 && row < items.length) {
-          setSelectedIndex(row);
-          setMenuFor(items[row]);
+  // 索引进度仅在设置内查看；扫描结束后刷新索引总数
+  const wasScanning = useRef(false);
+  useEffect(() => {
+    let stop = false;
+    const poll = () => {
+      scanStatus()
+        .then((s) => {
+          if (stop) return;
+          if (wasScanning.current && !s) runSearch();
+          wasScanning.current = !!s;
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const t = window.setInterval(poll, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [runSearch]);
+
+  const onKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      // 中文输入法合成期间（选候选词）不拦截任何按键
+      if (event.nativeEvent.isComposing) return;
+      if (settingsOpen) {
+        if (event.key === "Escape") setSettingsOpen(false);
+        return;
+      }
+      if (menuFor) {
+        if (event.key === "Escape") setMenuFor(null);
+        return;
+      }
+      if (previewPath) {
+        if (event.key === "Escape" || event.key === " ") {
+          event.preventDefault();
+          setPreviewPath(null);
         }
-      }}
-    >
+        return;
+      }
+      const inputEl = inputRef.current;
+      const typing = document.activeElement === inputEl;
+      const hasTextSelection =
+        typing &&
+        inputEl !== null &&
+        inputEl.selectionStart !== null &&
+        inputEl.selectionEnd !== null &&
+        inputEl.selectionStart !== inputEl.selectionEnd;
+
+      if (event.key === "ArrowDown" && items.length > 0) {
+        event.preventDefault();
+        setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedIndex((index) => Math.max(index - 1, 0));
+      } else if (event.key === "Enter" && !hasTextSelection) {
+        event.preventDefault();
+        const it = items[selectedIndex];
+        if (!it) return;
+        if (event.ctrlKey) {
+          actionLocate(it.path)
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        } else {
+          const target = it.path;
+          void getCurrentWindow().hide();
+          actionOpen(target)
+            .then(() => notice("已打开 " + target.split("\\").pop()))
+            .catch((e) => notice(String(e)));
+        }
+      } else if (event.key === " " && !typing) {
+        event.preventDefault();
+        const it = items[selectedIndex];
+        if (it) setPreviewPath(it.path);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        if (query) {
+          setQuery("");
+        } else {
+          void getCurrentWindow().hide();
+        }
+      } else if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      } else if (event.key === "c" && (event.ctrlKey || event.metaKey) && !hasTextSelection) {
+        const it = items[selectedIndex];
+        if (!it) return;
+        event.preventDefault();
+        if (event.shiftKey) {
+          actionCopyFiles([it.path])
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        } else {
+          actionCopyPath(it.path, "full")
+            .then((m) => notice(m))
+            .catch((e) => notice(String(e)));
+        }
+      }
+    },
+    [items, selectedIndex, query, previewPath, menuFor, settingsOpen, notice]
+  );
+
+  return (
+    <div className="app" onKeyDown={onKeyDown}>
       <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen ? (
         <>
-          <div
-            className="settings-top"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "10px 16px",
-              borderBottom: "1px solid #e5e7eb",
-              background: "#ffffff",
-            }}
-          >
+          <div className="settings-top">
             <b>设置</b>
             <button className="settings-back" onClick={() => setSettingsOpen(false)}>
               返回搜索（Esc）
@@ -229,12 +300,6 @@ export default function QuickApp() {
           <div className="result-status">
             {`共 ${items.length} 项 · 索引 ${total} 条 · ${elapsed} ms`}
           </div>
-              </div>
-              <span className="scan-strip-text">
-                {scan.message ?? "正在索引"} · {Math.max(1, Math.round(scan.progress * 100)) + "%"}
-              </span>
-            </div>
-          ) : null}
           <ResultList
             items={items}
             density={density}
@@ -251,7 +316,6 @@ export default function QuickApp() {
       {menuFor ? (
         <ResultMenu
           item={menuFor}
-          pos={mousePos.current}
           onClose={() => setMenuFor(null)}
           onNotice={notice}
           onRefresh={runSearch}
