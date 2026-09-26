@@ -30,3 +30,6 @@ releases/**/*.deb
 releases/**/*.rpm
 
 ff-desktop.png
+
+# 防止快照递归嵌套
+releases/*/source/releases/
