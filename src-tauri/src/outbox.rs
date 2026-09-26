@@ -81,6 +81,17 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, bg: DbHandleArc, stop: Arc<At
     std::thread::Builder::new()
         .name("outbox-consumer".into())
         .spawn(move || {
+            // 消费线程降优先级，避免与界面争抢 CPU
+            #[cfg(windows)]
+            unsafe {
+                use windows::Win32::System::Threading::{
+                    SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+                };
+                let _ = SetThreadPriority(
+                    windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                    THREAD_PRIORITY_BELOW_NORMAL,
+                );
+            }
             let last_commit = std::time::Instant::now();
             let _ = last_commit;
             loop {
