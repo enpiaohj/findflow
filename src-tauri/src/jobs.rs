@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::settings::SettingsStore;
+use crate::settings::{DbHandle, SettingsStore};
 use crate::util;
 
 pub struct JobFlags {
@@ -16,13 +16,15 @@ pub struct JobFlags {
 /// 后台任务引擎：状态持久化到 jobs 表，支持暂停 / 恢复 / 取消 / 崩溃恢复（FR03）。
 pub struct JobEngine {
     pub db: Arc<SettingsStore>,
+    pub bg: Arc<DbHandle>,
     handles: Arc<Mutex<HashMap<i64, Arc<JobFlags>>>>,
 }
 
 impl JobEngine {
-    pub fn new(db: Arc<SettingsStore>) -> Self {
+    pub fn new(db: Arc<SettingsStore>, bg: Arc<DbHandle>) -> Self {
         Self {
             db,
+            bg,
             handles: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -72,7 +74,7 @@ impl JobEngine {
         self.handles.lock().unwrap().insert(job_id, flags.clone());
         let ctx = JobContext {
             job_id,
-            db: self.db.clone(),
+            db: self.bg.clone(),
             flags,
             last_report: Mutex::new(std::time::Instant::now()),
         };
@@ -151,7 +153,7 @@ impl JobEngine {
 
 pub struct JobContext {
     pub job_id: i64,
-    pub db: Arc<SettingsStore>,
+    pub db: Arc<DbHandle>,
     flags: Arc<JobFlags>,
     last_report: Mutex<std::time::Instant>,
 }

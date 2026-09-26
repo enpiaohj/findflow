@@ -4,6 +4,20 @@ use rusqlite::Connection;
 use serde_json::Value;
 use tauri::State;
 
+/// 后台专用数据库连接句柄（与界面连接分离，避免互相阻塞）。
+pub struct DbHandle(pub Mutex<Connection>);
+
+impl DbHandle {
+    pub fn new(conn: Connection) -> Self {
+        Self(Mutex::new(conn))
+    }
+
+    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
+        let g = self.0.lock().unwrap();
+        f(&g)
+    }
+}
+
 /// 全局设置存储：key -> JSON 值，SQLite 单连接互斥复用。
 pub struct SettingsStore {
     conn: Mutex<Connection>,

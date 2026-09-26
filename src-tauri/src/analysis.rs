@@ -54,7 +54,7 @@ pub fn large_files(
 /// 重复文件三级流程：大小分组 → 快速指纹（头尾 64KB）→ 完整 BLAKE3（FR14）。
 pub fn run_duplicates(
     ctx: JobContext,
-    db: std::sync::Arc<crate::settings::SettingsStore>,
+    db: std::sync::Arc<crate::settings::DbHandle>,
     min_size: i64,
     _keep_how: String,
 ) {
@@ -179,7 +179,7 @@ pub fn start_duplicates_job(
     min_size: i64,
     keep_how: String,
 ) -> Result<(), String> {
-    let db = state.engine.db.clone();
+    let db = state.bg_db.clone();
     state.engine.start(
         "duplicates",
         serde_json::json!({"minSize": min_size}),

@@ -23,7 +23,7 @@ fn supported_ext(ext: &str) -> Option<&'static str> {
 /// 全文提取任务：按范围处理 pending 文件，写入 content_text + outbox（FR06）。
 pub fn run_fulltext(
     ctx: JobContext,
-    db: std::sync::Arc<crate::settings::SettingsStore>,
+    db: std::sync::Arc<crate::settings::DbHandle>,
     scope_only: Option<i64>,
 ) {
     let files: Result<Vec<(i64, String, String, i64, i64)>, String> = db.with_conn(|c| {
@@ -139,7 +139,7 @@ pub fn run_fulltext(
 }
 
 fn mark_state(
-    db: std::sync::Arc<crate::settings::SettingsStore>,
+    db: std::sync::Arc<crate::settings::DbHandle>,
     fid: i64,
     status: &str,
     error: &str,
@@ -170,7 +170,7 @@ pub fn start_fulltext_job(
     state: &crate::AppState,
     scope_id: Option<i64>,
 ) -> Result<(), String> {
-    let db = state.engine.db.clone();
+    let db = state.bg_db.clone();
     state
         .engine
         .start("fulltext", serde_json::json!({"scopeId": scope_id}), move |ctx| {

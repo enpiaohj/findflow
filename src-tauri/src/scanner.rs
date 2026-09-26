@@ -5,7 +5,7 @@ use rusqlite::{params, Connection};
 
 use crate::jobs::JobContext;
 use crate::scope::{scope_options, ScopeOptions};
-use crate::settings::SettingsStore;
+use crate::settings::DbHandle;
 use crate::util;
 
 /// 读取单个路径的元数据行；失败时返回 None（跳过并计数，不中断任务）。
@@ -313,7 +313,7 @@ fn walk_dir(
 }
 
 pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), String> {
-    let db = state.engine.db.clone();
+    let db = state.bg_db.clone();
     let (root, opts_json) = db.with_conn(|c| {
         c.query_row(
             "SELECT path, options_json FROM scopes WHERE scope_id=?1",
@@ -338,7 +338,7 @@ pub fn start_scan_job(state: &crate::AppState, scope_id: i64) -> Result<(), Stri
 
 fn run_initial_scan(
     ctx: JobContext,
-    db: Arc<SettingsStore>,
+    db: Arc<DbHandle>,
     scope_id: i64,
     root: String,
     opts: ScopeOptions,
@@ -417,7 +417,7 @@ fn run_initial_scan(
 
 /// 校准扫描：磁盘与索引做差集修正，处理监听离线期间的变化（FR04）。
 pub fn start_recalibrate_job(state: &crate::AppState, scope_id: i64) -> Result<(), String> {
-    let db = state.engine.db.clone();
+    let db = state.bg_db.clone();
     let (root, opts_json) = db.with_conn(|c| {
         c.query_row(
             "SELECT path, options_json FROM scopes WHERE scope_id=?1",
@@ -438,7 +438,7 @@ pub fn start_recalibrate_job(state: &crate::AppState, scope_id: i64) -> Result<(
 
 fn run_recalibrate(
     ctx: JobContext,
-    db: Arc<SettingsStore>,
+    db: Arc<DbHandle>,
     scope_id: i64,
     root: String,
     opts: ScopeOptions,

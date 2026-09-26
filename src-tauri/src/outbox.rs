@@ -4,9 +4,16 @@ use std::time::Duration;
 
 use rusqlite::params;
 
+use crate::settings::DbHandle;
+
 /// outbox 消费线程：SQLite 事务先落元数据与待索引事件，后台再提交 Tantivy，
 /// 异常退出后可继续消费，避免两套存储静默不一致（设计文档 §7.3）。
-pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
+/// 全程使用后台独立连接，不阻塞界面。
+pub fn spawn_consumer(
+    state: Arc<crate::AppState>,
+    bg: Arc<DbHandle>,
+    stop: Arc<AtomicBool>,
+) {
     std::thread::Builder::new()
         .name("outbox-consumer".into())
         .spawn(move || loop {
@@ -14,7 +21,7 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
                 break;
             }
             let mut last_commit = std::time::Instant::now() - Duration::from_secs(10);
-            let batch = state.db.with_conn(|c| -> Result<Vec<(i64, i64, String)>, String> {
+            let batch = bg.with_conn(|c| -> Result<Vec<(i64, i64, String)>, String> {
                 let mut stmt = c
                     .prepare(
                         "SELECT event_id, file_id, operation FROM index_outbox
@@ -34,13 +41,13 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
                 Ok(events) => {
                     let mut done_ids: Vec<i64> = Vec::with_capacity(events.len());
                     for (event_id, fid, op) in &events {
-                        apply_event(&state, *fid, op);
+                        apply_event(&bg, state.clone(), *fid, op);
                         done_ids.push(*event_id);
                     }
                     // 单条语句批量删除已应用事件，减少持锁次数
                     if !done_ids.is_empty() {
                         let list = done_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
-                        state.db.with_conn(|c| {
+                        bg.with_conn(|c| {
                             c.execute(
                                 &format!("DELETE FROM index_outbox WHERE event_id IN ({})", list),
                                 [],
@@ -63,13 +70,18 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, stop: Arc<AtomicBool>) {
         .ok();
 }
 
-fn apply_event(state: &crate::AppState, fid: i64, op: &str) {
+fn apply_event(
+    bg: &DbHandle,
+    state: Arc<crate::AppState>,
+    fid: i64,
+    op: &str,
+) {
     if op == "delete" {
         state.index.delete(fid as u64);
         return;
     }
     // upsert：重读行，内容/OCR 已就绪则一并写入。
-    let row: Option<(String, String, String, String)> = state.db.with_conn(|c| {
+    let row: Option<(String, String, String, String)> = bg.with_conn(|c| {
         c.query_row(
             "SELECT name, COALESCE(f.fulltext_state,'none'), COALESCE(cs.content_hash,''),
                     COALESCE(f.ocr_state,'none')
@@ -93,7 +105,7 @@ fn apply_event(state: &crate::AppState, fid: i64, op: &str) {
         return;
     };
     let _content = if ft_state == "done" {
-        state.db.with_conn(|c| {
+        bg.with_conn(|c| {
             c.query_row(
                 "SELECT content_text FROM content_text WHERE file_id=?1",
                 params![fid],
@@ -106,7 +118,7 @@ fn apply_event(state: &crate::AppState, fid: i64, op: &str) {
     };
     let content = _content.as_deref();
     let ocr = if ocr_state == "done" {
-        state.db.with_conn(|c| {
+        bg.with_conn(|c| {
             c.query_row(
                 "SELECT ocr_text FROM ocr_text WHERE file_id=?1",
                 params![fid],

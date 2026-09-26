@@ -112,7 +112,7 @@ fn batch_loop(state: Arc<crate::AppState>, rx: Receiver<WatchMsg>) {
 }
 
 fn apply_paths(state: &Arc<crate::AppState>, paths: Vec<String>) {
-    state.db.with_conn(|c| {
+    state.bg_db.with_conn(|c| {
         c.execute("BEGIN IMMEDIATE", []).ok();
         for p in &paths {
             if std::path::Path::new(p).exists() {
@@ -147,7 +147,7 @@ fn apply_paths(state: &Arc<crate::AppState>, paths: Vec<String>) {
 }
 
 fn apply_rename(state: &Arc<crate::AppState>, from: &str, to: &str) {
-    state.db.with_conn(|c| {
+    state.bg_db.with_conn(|c| {
         // 同目录重命名直接改路径；目录重命名处理子树前缀。
         c.execute("UPDATE files SET path=?2, name=?3, updated_ms=?4 WHERE path=?1",
             params![from, to, std::path::Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), crate::util::now_ms()])

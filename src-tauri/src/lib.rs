@@ -34,6 +34,7 @@ pub struct HotkeyState(pub std::sync::Mutex<String>);
 
 pub struct AppState {
     pub db: Arc<settings::SettingsStore>,
+    pub bg_db: Arc<crate::settings::DbHandle>,
     pub engine: jobs::JobEngine,
     pub index: searchindex::SearchIndex,
     pub watch: OnceLock<watcher::WatchPool>,
@@ -112,28 +113,64 @@ pub fn run() {
             let data_dir = data_dir;
             logger::init(&data_dir);
 
+            // 界面专用连接 + 后台专用连接（WAL 读写并发互不阻塞）
             let conn = db::open(&data_dir.join("findflow.db"))?;
+            let conn_bg = db::open(&data_dir.join("findflow.db"))?;
             let store = Arc::new(settings::SettingsStore::new(conn));
             let index = searchindex::SearchIndex::open_or_create(&data_dir.join("index"))?;
             if index.fresh {
-                // 索引重建：把全部文件重新入队，由 outbox 消费者从 SQLite 全量重放
-                let reenqueued = store.with_conn(|c| {
-                    c.execute(
-                        "INSERT INTO index_outbox(file_id, operation, created_ms)
-                         SELECT file_id, 'upsert', ?1 FROM files",
-                        rusqlite::params![crate::util::now_ms()],
-                    )
+                // 索引重建：后台分块入队（避免启动期长事务阻塞界面主线程）
+                let bg_enqueue = Arc::new(crate::settings::DbHandle::new(db::open(
+                    &data_dir.join("findflow.db"),
+                )?));
+                std::thread::Builder::new()
+                    .name("reindex-enqueue".into())
+                    .spawn(move || {
+                        let mut last: i64 = 0;
+                        loop {
+                            let batch_max: i64 = bg_enqueue
+                                .with_conn(|c| {
+                                    c.query_row(
+                                        "SELECT COALESCE(MAX(file_id), 0) FROM (
+                                            SELECT file_id FROM files WHERE file_id > ?1
+                                            ORDER BY file_id LIMIT 50000
+                                        )",
+                                        [last],
+                                        |r| r.get::<_, i64>(0),
+                                    )
+                                    .map_err(|e| e.to_string())
+                                })
+                                .unwrap_or(0);
+                            if batch_max <= last {
+                                break;
+                            }
+                            let n = bg_enqueue.with_conn(|c| {
+                                c.execute(
+                                    "INSERT INTO index_outbox(file_id, operation, created_ms)
+                                     SELECT file_id, 'upsert', ?3 FROM files
+                                     WHERE file_id > ?1 AND file_id <= ?2",
+                                    rusqlite::params![last, batch_max, crate::util::now_ms()],
+                                )
+                            })
+                            .unwrap_or(0);
+                            if n == 0 {
+                                break;
+                            }
+                            last = batch_max;
+                            std::thread::sleep(std::time::Duration::from_millis(60));
+                        }
+                        tracing::info!("索引重建入队完成");
+                    })
                     .ok();
-                });
-                let _ = reenqueued;
-                tracing::info!("索引已重建，全量重放入队");
             }
 
-            let engine = jobs::JobEngine::new(store.clone());
+            let bg_db = Arc::new(crate::settings::DbHandle::new(conn_bg));
+            let engine = jobs::JobEngine::new(store.clone(), bg_db.clone());
             engine.recover();
 
             let state = Arc::new(AppState {
                 db: store.clone(),
+                bg_db,
                 engine,
                 index,
                 watch: OnceLock::new(),
@@ -141,7 +178,7 @@ pub fn run() {
 
             // outbox 消费 + 校准定时器
             let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            outbox::spawn_consumer(state.clone(), stop_flag.clone());
+            outbox::spawn_consumer(state.clone(), state.bg_db.clone(), stop_flag.clone());
             watcher::spawn_calibration_timer(state.clone(), stop_flag);
 
             // 恢复既有范围的监听

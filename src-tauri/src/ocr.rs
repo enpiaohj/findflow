@@ -12,7 +12,7 @@ const DAILY_OCR_LIMIT: u64 = 5_000;
 /// OCR 任务：对范围内图片提取文字（Windows.Media.Ocr），文本标记来源与置信度。
 pub fn run_ocr(
     ctx: JobContext,
-    db: std::sync::Arc<crate::settings::SettingsStore>,
+    db: std::sync::Arc<crate::settings::DbHandle>,
     scope_id: Option<i64>,
 ) {
     let files: Vec<(i64, String, i64)> = match db.with_conn(|c| {
@@ -112,7 +112,7 @@ pub fn run_ocr(
     ctx.finish_ok(Some(serde_json::json!({"done": ok, "failed": fail}).to_string()));
 }
 
-fn bump_daily_counter(db: &std::sync::Arc<crate::settings::SettingsStore>, value: u64) {
+fn bump_daily_counter(db: &std::sync::Arc<crate::settings::DbHandle>, value: u64) {
     db.with_conn(|c| {
             c.execute(
                 "INSERT INTO settings(key, value_json, updated_at) VALUES ('ocr.processed_today', ?1, ?2)
@@ -177,7 +177,7 @@ pub fn start_ocr_job(
     state: &crate::AppState,
     scope_id: Option<i64>,
 ) -> Result<(), String> {
-    let db = state.engine.db.clone();
+    let db = state.bg_db.clone();
     state
         .engine
         .start("ocr", serde_json::json!({"scopeId": scope_id}), move |ctx| {
