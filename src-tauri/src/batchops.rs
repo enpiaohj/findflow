@@ -62,7 +62,7 @@ fn illegal(name: &str) -> bool {
 
 /// 批量重命名预演：原名称 → 新名称对照 + 冲突/非法检测（FR10 先预演）。
 #[tauri::command]
-pub fn batch_rename_preview(request: BatchRequest) -> Result<Vec<PlanItem>, String> {
+pub async fn batch_rename_preview(request: BatchRequest) -> Result<Vec<PlanItem>, String> {
     let mut items = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (i, p) in request.paths.iter().enumerate() {
@@ -97,7 +97,7 @@ pub fn batch_rename_preview(request: BatchRequest) -> Result<Vec<PlanItem>, Stri
 
 /// 执行批量重命名；保存反向映射供一次性撤销。
 #[tauri::command]
-pub fn batch_rename_execute(
+pub async fn batch_rename_execute(
     app: tauri::AppHandle,
     items: Vec<PlanItem>,
 ) -> Result<serde_json::Value, String> {
@@ -161,7 +161,7 @@ pub fn batch_rename_execute(
 
 /// 一次性撤销批量重命名（撤销前由前端再次确认，FR10）。
 #[tauri::command]
-pub fn batch_rename_undo(app: tauri::AppHandle, operation_id: i64) -> Result<serde_json::Value, String> {
+pub async fn batch_rename_undo(app: tauri::AppHandle, operation_id: i64) -> Result<serde_json::Value, String> {
     let state: tauri::State<crate::AppState> = app.state();
     let rows: Vec<(i64, String, String)> = state.db.with_conn(|c| {
         let mut stmt = c
@@ -199,7 +199,7 @@ pub fn batch_rename_undo(app: tauri::AppHandle, operation_id: i64) -> Result<ser
 
 /// 批量移动预演。
 #[tauri::command]
-pub fn batch_move_preview(paths: Vec<String>, target_dir: String) -> Result<Vec<PlanItem>, String> {
+pub async fn batch_move_preview(paths: Vec<String>, target_dir: String) -> Result<Vec<PlanItem>, String> {
     if !Path::new(&target_dir).is_dir() {
         return Err("目标目录不存在".into());
     }
@@ -232,7 +232,7 @@ pub fn batch_move_preview(paths: Vec<String>, target_dir: String) -> Result<Vec<
 
 /// 批量移动执行（FR11：预检查后执行，结果逐项返回）。
 #[tauri::command]
-pub fn batch_move_execute(
+pub async fn batch_move_execute(
     items: Vec<PlanItem>,
     conflict: String,
 ) -> Result<serde_json::Value, String> {

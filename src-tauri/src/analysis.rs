@@ -9,7 +9,7 @@ use crate::models::{DuplicateGroup, FileRow, OrganizerRule};
 
 /// 大文件分析（FR13）：按范围取最大的 N 个文件，删除前会重新读取属性。
 #[tauri::command]
-pub fn large_files(
+pub async fn large_files(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     min_size: i64,
     limit: i64,
@@ -207,7 +207,7 @@ fn full_hash(p: &Path) -> Option<String> {
 
 /// 规则式智能整理建议：按扩展名/日期归类到目标目录（FR15）。
 #[tauri::command]
-pub fn organize_suggest(
+pub async fn organize_suggest(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     source_dir: String,
     rule_type: String,
@@ -265,7 +265,7 @@ pub struct SimilarGroup {
 
 /// 相似图片实验：dHash 感知哈希 + 汉明距离（P3 独立实验，不与字节重复混淆）。
 #[tauri::command]
-pub fn similar_images(
+pub async fn similar_images(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     path_prefix: String,
     threshold: i32,
@@ -370,7 +370,7 @@ fn dhash(p: &Path) -> Option<u64> {
 
 /// 智能整理执行（默认仅建议；自动执行时保留 operation_log，FR15）。
 #[tauri::command]
-pub fn organize_execute(items: Vec<crate::models::PlanItem>) -> Result<serde_json::Value, String> {
+pub async fn organize_execute(items: Vec<crate::models::PlanItem>) -> Result<serde_json::Value, String> {
     let mut ok = 0;
     let mut failed = 0;
     for item in &items {
@@ -392,7 +392,7 @@ pub fn organize_execute(items: Vec<crate::models::PlanItem>) -> Result<serde_jso
 pub fn _unused(_: OrganizerRule) {}
 
 #[tauri::command]
-pub fn start_duplicates_cmd(
+pub async fn start_duplicates_cmd(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     min_size: i64,
     keep_how: String,

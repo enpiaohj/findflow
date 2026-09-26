@@ -102,12 +102,12 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
 }
 
 #[tauri::command]
-pub fn scopes_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<crate::models::ScopeInfo>, String> {
+pub async fn scopes_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<crate::models::ScopeInfo>, String> {
     store.db.with_conn(list_scopes)
 }
 
 #[tauri::command]
-pub fn scope_add(
+pub async fn scope_add(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     path: String,
     options: Option<serde_json::Value>,
@@ -148,7 +148,7 @@ pub fn scope_add(
 }
 
 #[tauri::command]
-pub fn scope_remove(
+pub async fn scope_remove(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     delete_index: bool,
@@ -167,7 +167,7 @@ pub fn scope_remove(
 }
 
 #[tauri::command]
-pub fn scope_set_enabled(
+pub async fn scope_set_enabled(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     enabled: bool,
@@ -196,7 +196,7 @@ pub fn scope_set_enabled(
 }
 
 #[tauri::command]
-pub fn scope_update_options(
+pub async fn scope_update_options(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     scope_id: i64,
     options: serde_json::Value,
@@ -212,7 +212,7 @@ pub fn scope_update_options(
 }
 
 #[tauri::command]
-pub fn scope_trial_scan(path: String) -> Result<crate::models::TrialScanResult, String> {
+pub async fn scope_trial_scan(path: String) -> Result<crate::models::TrialScanResult, String> {
     let root = std::path::PathBuf::from(&path);
     if !root.is_dir() {
         return Err("目录不存在或不可访问".into());

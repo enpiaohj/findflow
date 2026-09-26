@@ -245,7 +245,7 @@ impl JobContext {
 }
 
 #[tauri::command]
-pub fn jobs_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, limit: i64) -> Result<Vec<crate::models::JobInfo>, String> {
+pub async fn jobs_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, limit: i64) -> Result<Vec<crate::models::JobInfo>, String> {
     store.engine.db.with_conn(|c| {
         let mut stmt = c
             .prepare(
@@ -272,22 +272,22 @@ pub fn jobs_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, limit
 }
 
 #[tauri::command]
-pub fn job_pause(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
+pub async fn job_pause(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
     store.engine.pause(job_id)
 }
 
 #[tauri::command]
-pub fn job_resume(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
+pub async fn job_resume(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
     store.engine.resume(job_id)
 }
 
 #[tauri::command]
-pub fn job_cancel(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
+pub async fn job_cancel(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
     store.engine.cancel(job_id)
 }
 
 #[tauri::command]
-pub fn job_retry_failed(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
+pub async fn job_retry_failed(store: tauri::State<'_, std::sync::Arc<crate::AppState>>, job_id: i64) -> Result<(), String> {
     // 简单重试：把失败任务重新入队（重建同 kind 任务，由各任务自行读取 checkpoint 续跑）。
     let kind: String = store
         .engine
@@ -319,7 +319,7 @@ pub fn job_retry_failed(store: tauri::State<'_, std::sync::Arc<crate::AppState>>
 
 /// 主搜索窗索引进度（仅返回运行中的初始扫描；完成/无任务返回 None）。
 #[tauri::command]
-pub fn scan_status(
+pub async fn scan_status(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<Option<crate::models::ScanProgress>, String> {
     store.db.with_conn(|c| {

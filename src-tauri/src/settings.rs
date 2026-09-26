@@ -74,7 +74,7 @@ impl SettingsStore {
 }
 
 #[tauri::command]
-pub fn get_setting(
+pub async fn get_setting(
     store: State<'_, std::sync::Arc<crate::AppState>>,
     key: String,
 ) -> Result<Option<Value>, String> {
@@ -82,7 +82,7 @@ pub fn get_setting(
 }
 
 #[tauri::command]
-pub fn set_setting(
+pub async fn set_setting(
     store: State<'_, std::sync::Arc<crate::AppState>>,
     key: String,
     value: Value,
@@ -91,7 +91,7 @@ pub fn set_setting(
 }
 
 #[tauri::command]
-pub fn delete_setting(
+pub async fn delete_setting(
     store: State<'_, std::sync::Arc<crate::AppState>>,
     key: String,
 ) -> Result<bool, String> {

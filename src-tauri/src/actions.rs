@@ -131,7 +131,7 @@ pub fn verify_copy(src: &Path, dest: &Path) -> Result<(), String> {
 // ---------- Tauri 命令 ----------
 
 #[tauri::command]
-pub fn action_open(app: tauri::AppHandle, path: String) -> Result<String, String> {
+pub async fn action_open(app: tauri::AppHandle, path: String) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_path(path.clone(), None::<&str>)
@@ -141,7 +141,7 @@ pub fn action_open(app: tauri::AppHandle, path: String) -> Result<String, String
 }
 
 #[tauri::command]
-pub fn action_locate(path: String) -> Result<String, String> {
+pub async fn action_locate(path: String) -> Result<String, String> {
     std::process::Command::new("explorer")
         .arg(format!("/select,{path}"))
         .spawn()
@@ -150,7 +150,7 @@ pub fn action_locate(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn action_copy_path(path: String, format: String) -> Result<String, String> {
+pub async fn action_copy_path(path: String, format: String) -> Result<String, String> {
     let text = match format.as_str() {
         "name" => Path::new(&path)
             .file_name()
@@ -179,7 +179,7 @@ fn set_clipboard_text(text: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn action_copy_files(paths: Vec<String>) -> Result<String, String> {
+pub async fn action_copy_files(paths: Vec<String>) -> Result<String, String> {
     set_clipboard_files(&paths)?;
     Ok(format!("已复制 {} 个文件", paths.len()))
 }
@@ -262,7 +262,7 @@ pub struct DeleteRequest {
 }
 
 #[tauri::command]
-pub fn action_recycle(
+pub async fn action_recycle(
     app: tauri::AppHandle,
     request: DeleteRequest,
 ) -> Result<Vec<crate::models::PlanItem>, String> {
@@ -288,7 +288,7 @@ pub fn action_recycle(
 }
 
 #[tauri::command]
-pub fn action_delete_permanent(
+pub async fn action_delete_permanent(
     app: tauri::AppHandle,
     request: DeleteRequest,
 ) -> Result<Vec<crate::models::PlanItem>, String> {
@@ -319,7 +319,7 @@ pub fn action_delete_permanent(
 }
 
 #[tauri::command]
-pub fn action_issue_delete_token(paths: Vec<String>) -> Result<String, String> {
+pub async fn action_issue_delete_token(paths: Vec<String>) -> Result<String, String> {
     let token = uuid_simple();
     let mut guard = TOKENS.lock().unwrap();
     guard.push((token.clone(), paths.clone(), Instant::now()));
@@ -338,19 +338,19 @@ fn verify_token(token: &str, paths: &[String]) -> bool {
 static TOKENS: Mutex<Vec<(String, Vec<String>, Instant)>> = Mutex::new(Vec::new());
 
 #[tauri::command]
-pub fn action_open_with(path: String) -> Result<String, String> {
+pub async fn action_open_with(path: String) -> Result<String, String> {
     shell_invoke(&path, "openas")?;
     Ok("已调出打开方式".into())
 }
 
 #[tauri::command]
-pub fn action_properties(path: String) -> Result<String, String> {
+pub async fn action_properties(path: String) -> Result<String, String> {
     shell_invoke(&path, "properties")?;
     Ok("已调出属性".into())
 }
 
 #[tauri::command]
-pub fn action_open_terminal(path: String) -> Result<String, String> {
+pub async fn action_open_terminal(path: String) -> Result<String, String> {
     let dir = Path::new(&path);
     let dir = if dir.is_dir() {
         dir
@@ -368,7 +368,7 @@ pub fn action_open_terminal(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn action_open_vscode(path: String) -> Result<String, String> {
+pub async fn action_open_vscode(path: String) -> Result<String, String> {
     std::process::Command::new("cmd")
         .args(["/C", "code", &path])
         .spawn()
@@ -377,7 +377,7 @@ pub fn action_open_vscode(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn action_rename(
+pub async fn action_rename(
     app: tauri::AppHandle,
     old_path: String,
     new_name: String,

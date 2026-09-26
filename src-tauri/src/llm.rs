@@ -23,13 +23,13 @@ fn read_key(app: &tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn llm_has_key(app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn llm_has_key(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(key_path(&app).map(|p| p.exists()).unwrap_or(false))
 }
 
 /// 运行时保存 Key：DPAPI CurrentUser 加密后落盘（§10.3）。
 #[tauri::command]
-pub fn llm_set_key(app: tauri::AppHandle, key: String) -> Result<(), String> {
+pub async fn llm_set_key(app: tauri::AppHandle, key: String) -> Result<(), String> {
     let path = key_path(&app)?;
     let blob = crate::dpapi::protect(key.trim().as_bytes())?;
     std::fs::write(&path, blob).map_err(|e| e.to_string())?;
@@ -37,7 +37,7 @@ pub fn llm_set_key(app: tauri::AppHandle, key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn llm_clear_key(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn llm_clear_key(app: tauri::AppHandle) -> Result<(), String> {
     let path = key_path(&app)?;
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
