@@ -81,10 +81,25 @@ impl SearchIndex {
         };
         std::fs::write(&format_path, crate::tokenizer::INDEX_FORMAT).ok();
         tokenizer::register(&index)?;
+        // 写入期间降当前线程优先级：批量重放不与界面争抢 CPU
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
         // 单线程 writer：桌面场景写入吞吐足够，且避免多 worker 的 io 并发问题
         let writer = index
             .writer_with_num_threads(1, 64 * 1024 * 1024)
             .map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_NORMAL,
+            };
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        }
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -124,8 +139,11 @@ impl SearchIndex {
         for w in chars.windows(3) {
             d.add_text(self.name_tri, w.iter().collect::<String>());
         }
-        d.add_text(self.py_ngram, crate::util::pinyin_full(name));
-        d.add_text(self.pya_ngram, crate::util::pinyin_abbr(name));
+        // 仅含 CJK 的名称才需要拼音（纯 ASCII 名称拼音与原名等价，跳过省一半开销）
+        if name.chars().any(|c| !c.is_ascii()) {
+            d.add_text(self.py_ngram, crate::util::pinyin_full(name));
+            d.add_text(self.pya_ngram, crate::util::pinyin_abbr(name));
+        }
         if let Some(c) = content {
             if !c.is_empty() {
                 d.add_text(self.content, c);

@@ -38,6 +38,7 @@ pub struct AppState {
     pub engine: jobs::JobEngine,
     pub index: searchindex::SearchIndex,
     pub watch: OnceLock<watcher::WatchPool>,
+    pub usage_cache: Arc<std::sync::RwLock<Option<storage_cmd::StorageUsage>>>,
 }
 
 impl AppState {
@@ -168,12 +169,14 @@ pub fn run() {
             let engine = jobs::JobEngine::new(store.clone(), bg_db.clone());
             engine.recover();
 
+            let usage_cache = Arc::new(std::sync::RwLock::new(None));
             let state = Arc::new(AppState {
                 db: store.clone(),
                 bg_db,
                 engine,
                 index,
                 watch: OnceLock::new(),
+                usage_cache,
             });
 
             // outbox 消费 + 校准定时器
@@ -336,12 +339,30 @@ pub mod storage_cmd {
     use serde::Serialize;
     use tauri::Manager;
 
-    #[derive(Serialize)]
+    #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct StorageUsage {
         pub data_dir: String,
         pub db_bytes: u64,
         pub index_bytes: u64,
+    }
+
+    pub fn compute_usage(
+        _bg: &std::sync::Arc<crate::settings::DbHandle>,
+        marker: &std::path::Path,
+    ) -> crate::storage_cmd::StorageUsage {
+        let effective = std::fs::read_to_string(marker)
+            .map(|s| std::path::PathBuf::from(s.trim()))
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let db_bytes = std::fs::metadata(effective.join("findflow.db"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let index_bytes = dir_size(&effective.join("index"));
+        crate::storage_cmd::StorageUsage {
+            data_dir: effective.to_string_lossy().to_string(),
+            db_bytes,
+            index_bytes,
+        }
     }
 
     fn dir_size(p: &std::path::Path) -> u64 {
@@ -360,26 +381,19 @@ pub mod storage_cmd {
 
     #[tauri::command]
     pub fn storage_usage(
-        _state: tauri::State<'_, crate::AppState>,
-        app: tauri::AppHandle,
+        state: tauri::State<'_, crate::AppState>,
     ) -> Result<StorageUsage, String> {
-        let data_dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?;
-        let marker = data_dir.join("storage-location.txt");
-        let effective = std::fs::read_to_string(&marker)
-            .map(|s| std::path::PathBuf::from(s.trim()))
-            .unwrap_or(data_dir.clone());
-        let db_bytes = std::fs::metadata(effective.join("findflow.db"))
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let index_bytes = crate::storage_cmd::dir_size(&effective.join("index"));
-        Ok(StorageUsage {
-            data_dir: effective.to_string_lossy().to_string(),
-            db_bytes,
-            index_bytes,
-        })
+        // 返回后台线程维护的缓存，界面零阻塞
+        let cached = state
+            .usage_cache
+            .read()
+            .unwrap()
+            .clone();
+        Ok(cached.unwrap_or(StorageUsage {
+            data_dir: String::new(),
+            db_bytes: 0,
+            index_bytes: 0,
+        }))
     }
 
     /// 更改存储位置：写入指针文件，重启后自动迁移数据库并重建索引。
