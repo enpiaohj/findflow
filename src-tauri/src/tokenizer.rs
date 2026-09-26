@@ -65,11 +65,20 @@ impl TokenStream for CnTokenStream {
     }
 }
 
+/// 索引格式版本：分词方案变更时递增，触发自动重建。
+pub const INDEX_FORMAT: &str = "2";
+
 /// 注册索引所需的全部分词器（n-gram 一律小写化）。
+/// v2 瘦身：拼音 n-gram 上限 8→6，首字母 1→2，去掉单字噪声。
 pub fn register(index: &tantivy::Index) -> Result<(), String> {
     use tantivy::tokenizer::{LowerCaser, TextAnalyzer};
     index.tokenizers().register("cn", CnTokenizer::default());
-    for (name, min, max) in [("bi", 2usize, 2usize), ("tri", 3, 3), ("py", 1, 8)] {
+    for (name, min, max) in [
+        ("bi", 2usize, 2usize),
+        ("tri", 3, 3),
+        ("py", 1, 6),
+        ("pya", 2, 6),
+    ] {
         let ngram = tantivy::tokenizer::NgramTokenizer::new(min, max, false)
             .map_err(|e| e.to_string())?;
         let analyzer = TextAnalyzer::builder(ngram).filter(LowerCaser).build();

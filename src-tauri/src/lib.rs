@@ -84,13 +84,50 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
+            let default_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&default_dir)?;
+            // 存储位置：默认目录下的 storage-location.txt 指向自定义目录；
+            // 首次切换时自动迁移数据库文件（索引不迁移，重建即可）。
+            let data_dir = match std::fs::read_to_string(default_dir.join("storage-location.txt")) {
+                Ok(s) => {
+                    let p = std::path::PathBuf::from(s.trim());
+                    if p.as_os_str().is_empty() {
+                        default_dir.clone()
+                    } else {
+                        let _ = std::fs::create_dir_all(&p);
+                        if default_dir.join("findflow.db").exists() && !p.join("findflow.db").exists() {
+                            for suffix in ["", "-wal", "-shm"] {
+                                let from = default_dir.join(format!("findflow.db{}", suffix));
+                                if from.exists() {
+                                    let _ = std::fs::copy(&from, p.join(format!("findflow.db{}", suffix)));
+                                }
+                            }
+                            tracing::info!("数据库已迁移至 {:?}", p);
+                        }
+                        p
+                    }
+                }
+                Err(_) => default_dir.clone(),
+            };
+            let data_dir = data_dir;
             logger::init(&data_dir);
 
             let conn = db::open(&data_dir.join("findflow.db"))?;
             let store = Arc::new(settings::SettingsStore::new(conn));
             let index = searchindex::SearchIndex::open_or_create(&data_dir.join("index"))?;
+            if index.fresh {
+                // 索引重建：把全部文件重新入队，由 outbox 消费者从 SQLite 全量重放
+                let reenqueued = store.with_conn(|c| {
+                    c.execute(
+                        "INSERT INTO index_outbox(file_id, operation, created_ms)
+                         SELECT file_id, 'upsert', ?1 FROM files",
+                        rusqlite::params![crate::util::now_ms()],
+                    )
+                    .ok();
+                });
+                let _ = reenqueued;
+                tracing::info!("索引已重建，全量重放入队");
+            }
 
             let engine = jobs::JobEngine::new(store.clone());
             engine.recover();
@@ -250,9 +287,96 @@ pub fn run() {
             updater_cmd::updater_check,
             updater_cmd::updater_install,
             hotkey::hotkey_apply,
+            storage_cmd::storage_usage,
+            storage_cmd::set_data_dir,
+            storage_cmd::relaunch_app,
         ])
         .run(tauri::generate_context!())
         .expect("FindFlow 启动失败");
+}
+
+pub mod storage_cmd {
+    use serde::Serialize;
+    use tauri::Manager;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct StorageUsage {
+        pub data_dir: String,
+        pub db_bytes: u64,
+        pub index_bytes: u64,
+    }
+
+    fn dir_size(p: &std::path::Path) -> u64 {
+        let mut sum = 0u64;
+        if let Ok(rd) = std::fs::read_dir(p) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    sum += dir_size(&e.path());
+                } else if let Ok(m) = e.metadata() {
+                    sum += m.len();
+                }
+            }
+        }
+        sum
+    }
+
+    #[tauri::command]
+    pub fn storage_usage(
+        _state: tauri::State<'_, crate::AppState>,
+        app: tauri::AppHandle,
+    ) -> Result<StorageUsage, String> {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?;
+        let marker = data_dir.join("storage-location.txt");
+        let effective = std::fs::read_to_string(&marker)
+            .map(|s| std::path::PathBuf::from(s.trim()))
+            .unwrap_or(data_dir.clone());
+        let db_bytes = std::fs::metadata(effective.join("findflow.db"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let index_bytes = crate::storage_cmd::dir_size(&effective.join("index"));
+        Ok(StorageUsage {
+            data_dir: effective.to_string_lossy().to_string(),
+            db_bytes,
+            index_bytes,
+        })
+    }
+
+    /// 更改存储位置：写入指针文件，重启后自动迁移数据库并重建索引。
+    #[tauri::command]
+    pub fn set_data_dir(
+        _state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+        app: tauri::AppHandle,
+        new_dir: String,
+    ) -> Result<(), String> {
+        let p = std::path::PathBuf::from(new_dir.trim());
+        if p.as_os_str().is_empty() {
+            return Err("路径不能为空".into());
+        }
+        std::fs::create_dir_all(&p).map_err(|e| format!("无法创建目录：{e}"))?;
+        if crate::scope::is_protected(&crate::util::normalize_path(&p)) {
+            return Err("系统与程序目录受保护，不能作为存储位置".into());
+        }
+        let marker = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("storage-location.txt");
+        std::fs::write(&marker, p.to_string_lossy().as_bytes())
+            .map_err(|e| format!("写入失败：{e}"))?;
+        Ok(())
+    }
+
+    /// 重启应用（应用存储位置迁移后调用）。
+    #[tauri::command]
+    pub fn relaunch_app(app: tauri::AppHandle) -> Result<(), String> {
+        app.restart();
+        #[allow(unreachable_code)]
+        Ok(())
+    }
 }
 
 pub mod hotkey {

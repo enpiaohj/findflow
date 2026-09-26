@@ -200,6 +200,16 @@ export const fileByPath = (path: string): Promise<FileRow | null> => invoke("fil
 
 export const hotkeyApply = (hotkey: string): Promise<void> =>
   invoke("hotkey_apply", { newHotkey: hotkey });
+export interface StorageUsage {
+  dataDir: string;
+  dbBytes: number;
+  indexBytes: number;
+}
+
+export const storageUsage = (): Promise<StorageUsage> => invoke('storage_usage');
+export const setDataDir = (newDir: string): Promise<void> => invoke('set_data_dir', { newDir });
+export const relaunchApp = (): Promise<void> => invoke('relaunch_app');
+
 export const updaterCheck = (): Promise<{ available: boolean; version: string | null }> =>
   invoke("updater_check");
 export const updaterInstall = (): Promise<void> => invoke("updater_install");

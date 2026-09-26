@@ -10,6 +10,7 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Te
 use crate::tokenizer;
 
 pub struct SearchIndex {
+    pub fresh: bool,
     pub index: Index,
     pub writer: std::sync::Mutex<IndexWriter>,
     pub reader: IndexReader,
@@ -24,9 +25,10 @@ pub struct SearchIndex {
 }
 
 fn text_opts(stored: bool, tokenizer_name: &str) -> TextOptions {
+    // py/bi/tri/pya 仅需词频（无短语查询依赖位置），索引体积更小
     let indexing = tantivy::schema::TextFieldIndexing::default()
         .set_tokenizer(tokenizer_name)
-        .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+        .set_index_option(IndexRecordOption::WithFreqs);
     let opts = TextOptions::default().set_indexing_options(indexing);
     if stored {
         opts.set_stored()
@@ -49,11 +51,35 @@ impl SearchIndex {
         let ocr = sb.add_text_field("ocr", text_opts(false, "cn"));
         let schema = sb.build();
 
-        let index = if dir.join("meta.json").exists() {
-            Index::open_in_dir(dir).map_err(|e| e.to_string())?
-        } else {
+        // 格式版本标记：分词方案变更或索引损坏时清空重建（数据以 SQLite 为准，可全量重放）
+        let format_path = dir.join(".ff-format");
+        let mut fresh = !dir.join("meta.json").exists();
+        if dir.join("meta.json").exists()
+            && std::fs::read_to_string(&format_path)
+                .map(|v| v.trim() != crate::tokenizer::INDEX_FORMAT)
+                .unwrap_or(true)
+        {
+            for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+            fresh = true;
+            tracing::warn!("索引格式变更，已清空旧索引待自动重建");
+        }
+        let index = if fresh {
             Index::create_in_dir(dir, schema.clone()).map_err(|e| e.to_string())?
+        } else {
+            match Index::open_in_dir(dir) {
+                Ok(i) => i,
+                Err(_) => {
+                    tracing::warn!("索引打开失败，重建索引");
+                    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                    Index::create_in_dir(dir, schema.clone()).map_err(|e| e.to_string())?
+                }
+            }
         };
+        std::fs::write(&format_path, crate::tokenizer::INDEX_FORMAT).ok();
         tokenizer::register(&index)?;
         // 单线程 writer：桌面场景写入吞吐足够，且避免多 worker 的 io 并发问题
         let writer = index
@@ -65,6 +91,7 @@ impl SearchIndex {
             .try_into()
             .map_err(|e| e.to_string())?;
         Ok(Self {
+            fresh,
             index,
             writer: std::sync::Mutex::new(writer),
             reader,

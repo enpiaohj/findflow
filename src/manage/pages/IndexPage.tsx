@@ -13,6 +13,10 @@ import {
   rebuildScope,
   fulltextStart,
   ocrStart,
+  storageUsage,
+  setDataDir,
+  relaunchApp,
+  formatBytes,
   diagnosticsHealth,
   type ScopeInfo,
 } from "../../api";
@@ -30,10 +34,12 @@ export default function IndexPage({ notice }: PageCtx) {
   const [health, setHealth] = useState<{ totalFiles: number; fulltextDone: number; ocrDone: number } | null>(null);
   const [trial, setTrial] = useState<TrialScanResultLike | null>(null);
   const [busy, setBusy] = useState(false);
+  const [usage, setUsage] = useState<{ dataDir: string; dbBytes: number; indexBytes: number } | null>(null);
 
   const reload = () => {
     scopesList().then(setScopes).catch(() => undefined);
     diagnosticsHealth().then(setHealth).catch(() => undefined);
+    storageUsage().then(setUsage).catch(() => undefined);
   };
   useEffect(reload, []);
   // 范围状态/数量轮询刷新，扫描完成后列表自动更新
@@ -167,6 +173,36 @@ export default function IndexPage({ notice }: PageCtx) {
           </div>
         </section>
       ) : null}
+
+      <section className="card">
+        <div className="card-head">
+          <h3>存储位置</h3>
+          <button
+            onClick={async () => {
+              const d = await open({ directory: true, multiple: false });
+              if (typeof d === 'string') {
+                try {
+                  await setDataDir(d);
+                  notice('存储位置已保存，重启应用后自动迁移数据');
+                } catch (e) {
+                  notice(String(e));
+                }
+              }
+            }}
+          >
+            更改存储位置
+          </button>
+        </div>
+        <p className="muted">{usage?.dataDir ?? '读取中…'}</p>
+        <p className="muted">数据库 {formatBytes(usage?.dbBytes ?? 0)} · 倒排索引 {formatBytes(usage?.indexBytes ?? 0)}</p>
+        <p className="muted">更改后重启应用：数据库自动迁移到新位置，索引在新位置重建。</p>
+        <button
+          className="btn-primary"
+          onClick={() => relaunchApp().catch((err: unknown) => notice(String(err)))}
+        >
+          立即重启并迁移
+        </button>
+      </section>
 
       <section className="card">
         <div className="card-head">
