@@ -1,0 +1,9 @@
+{
+  "version": "0.3.0",
+  "notes": "FindFlow v0.3.0：界面流畅度专项（命令异步化）、数据存储位置可配置、排除规则编辑、索引体积瘦身。",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.3.0/FindFlow-v0.3.0-win-x64-setup.exe"
+    }
+  }
+}
