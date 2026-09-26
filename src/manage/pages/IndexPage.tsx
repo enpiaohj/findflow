@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { PageCtx } from "../ManageBody";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -35,6 +36,11 @@ export default function IndexPage({ notice }: PageCtx) {
   const [trial, setTrial] = useState<TrialScanResultLike | null>(null);
   const [busy, setBusy] = useState(false);
   const [usage, setUsage] = useState<{ dataDir: string; dbBytes: number; indexBytes: number } | null>(null);
+  const [excludeEdit, setExcludeEdit] = useState<{
+    scopeId: number;
+    dirs: string;
+    exts: string;
+  } | null>(null);
 
   const reload = () => {
     scopesList().then(setScopes).catch(() => undefined);
@@ -130,6 +136,22 @@ export default function IndexPage({ notice }: PageCtx) {
                 重建
               </button>
               <button
+                onClick={() => {
+                  let dirs = '';
+                  let exts = '';
+                  try {
+                    const o = JSON.parse(s.optionsJson || '{}');
+                    dirs = (o.exclude_dirs ?? []).join(', ');
+                    exts = (o.exclude_exts ?? []).join(', ');
+                  } catch {
+                    /* 忽略解析失败 */
+                  }
+                  setExcludeEdit({ scopeId: s.scopeId, dirs, exts });
+                }}
+              >
+                排除规则
+              </button>
+              <button
                 className="btn-danger-text"
                 onClick={async () => {
                   if (
@@ -150,6 +172,89 @@ export default function IndexPage({ notice }: PageCtx) {
           </div>
         ))}
       </section>
+
+      {excludeEdit ? (
+        <section className="card trial-card">
+          <div className="card-head">
+            <h3>排除规则（范围 #{excludeEdit.scopeId}）</h3>
+          </div>
+          <div className="rule-grid">
+            <label>
+              排除目录（逗号分隔，匹配路径段）
+              <input
+                value={excludeEdit.dirs}
+                placeholder="node_modules, .git, temp"
+                onChange={(e) => setExcludeEdit({ ...excludeEdit, dirs: e.target.value })}
+              />
+            </label>
+            <label>
+              排除扩展名（逗号分隔）
+              <input
+                value={excludeEdit.exts}
+                placeholder="tmp, log, bak"
+                onChange={(e) => setExcludeEdit({ ...excludeEdit, exts: e.target.value })}
+              />
+            </label>
+          </div>
+          <div className="trial-actions">
+            <span className="muted">常用预设：</span>
+            {['node_modules', '.git', 'target', 'dist', 'build', '.venv'].map((p) => (
+              <button
+                key={p}
+                onClick={() =>
+                  setExcludeEdit((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          dirs: prev.dirs
+                            ? prev.dirs + ', ' + p
+                            : p,
+                        }
+                      : prev,
+                  )
+                }
+              >
+                + {p}
+              </button>
+            ))}
+          </div>
+          <div className="trial-actions">
+            <button onClick={() => setExcludeEdit(null)}>取消</button>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                const dirs = excludeEdit.dirs
+                  .split(/[,,]/)
+                  .map((x) => x.trim())
+                  .filter(Boolean);
+                const exts = excludeEdit.exts
+                  .split(/[,,]/)
+                  .map((x) => x.trim().replace(/^\./, ''))
+                  .filter(Boolean);
+                scopeSetEnabled(excludeEdit.scopeId, true)
+                  .then(() =>
+                    invoke('scope_update_options', {
+                      scopeId: excludeEdit.scopeId,
+                      options: {
+                        exclude_dirs: dirs,
+                        exclude_exts: exts,
+                        include_hidden: false,
+                      },
+                    })
+                  )
+                  .then(() => {
+                    notice('排除规则已保存，重新扫描后生效');
+                    setExcludeEdit(null);
+                    reload();
+                  })
+                  .catch((e) => notice(String(e)));
+              }}
+            >
+              保存规则并重扫
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {trial ? (
         <section className="card trial-card">

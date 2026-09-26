@@ -33,6 +33,8 @@ pub struct ScopeInfo {
     pub state: String,
     pub files_count: i64,
     pub baseline_at: Option<String>,
+    #[serde(default)]
+    pub options_json: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

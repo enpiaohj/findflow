@@ -31,6 +31,7 @@ export interface ScopeInfo {
   state: string;
   filesCount: number;
   baselineAt: string | null;
+  optionsJson: string;
 }
 
 export interface JobInfo {

@@ -252,37 +252,67 @@ impl SearchIndex {
         Box::new(BooleanQuery::new(shoulds))
     }
 
-    /// 检索候选 file_id 列表。
-    pub fn candidate_ids(&self, query: &dyn Query, limit: usize) -> Result<Vec<u64>, String> {
+    /// 检索候选：(file_id, 文档地址)。片段生成直接复用地址，零额外查询。
+    pub fn candidate_docs(
+        &self,
+        query: &dyn Query,
+        limit: usize,
+    ) -> Result<Vec<(u64, tantivy::DocAddress)>, String> {
         let searcher = self.reader.searcher();
         let top = searcher
             .search(query, &TopDocs::with_limit(limit))
             .map_err(|e| e.to_string())?;
-        let mut ids = Vec::with_capacity(top.len());
+        let mut out = Vec::with_capacity(top.len());
         for (_score, addr) in top {
             let d: TantivyDocument = searcher.doc(addr).map_err(|e| e.to_string())?;
             if let Some(v) = d.get_first(self.fid).and_then(|v| v.as_u64()) {
-                ids.push(v);
+                out.push((v, addr));
             }
         }
-        Ok(ids)
+        Ok(out)
     }
 
-    /// 生成命中片段（FR06）。
-    pub fn snippet(
+    /// 用已知文档地址生成命中片段（无额外查询）。
+    pub fn snippet_at(
         &self,
-        query: &dyn Query,
-        fid: u64,
-        field: tantivy::schema::Field,
+        generator: &tantivy::snippet::SnippetGenerator,
+        addr: tantivy::DocAddress,
+        _field: tantivy::schema::Field,
     ) -> Option<String> {
         let searcher = self.reader.searcher();
-        let generator =
-            tantivy::snippet::SnippetGenerator::create(&searcher, query, field).ok()?;
-        let term = Term::from_field_u64(self.fid, fid);
-        let q = TermQuery::new(term, IndexRecordOption::Basic);
-        let top = searcher.search(&q, &TopDocs::with_limit(1)).ok()?;
-        let (_score, addr) = top.first()?.clone();
         let d: TantivyDocument = searcher.doc(addr).ok()?;
-        Some(generator.snippet_from_doc(&d).fragment().to_string())
+        let snip = generator.snippet_from_doc(&d);
+        if snip.is_empty() {
+            None
+        } else {
+            Some(snip.fragment().to_string())
+        }
+    }
+
+    /// 为查询创建片段生成器（searcher 需与文档获取一致）。
+    pub fn snippet_generator(
+        &self,
+        query: &dyn Query,
+        field: tantivy::schema::Field,
+    ) -> Option<tantivy::snippet::SnippetGenerator> {
+        let searcher = self.reader.searcher();
+        tantivy::snippet::SnippetGenerator::create(&searcher, query, field).ok()
+    }
+
+    /// 用文档地址与生成器产出片段。
+    pub fn snippet_from_addr(
+        &self,
+        generator: &tantivy::snippet::SnippetGenerator,
+        addr: tantivy::DocAddress,
+    ) -> Option<String> {
+        let searcher = self.reader.searcher();
+        let d: TantivyDocument = searcher.doc(addr).ok()?;
+        let snippet = generator.snippet_from_doc(&d);
+        let fragment = snippet.fragment();
+        if fragment.is_empty() {
+            None
+        } else {
+            Some(fragment.to_string())
+        }
     }
 }

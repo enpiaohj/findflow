@@ -23,6 +23,7 @@ pub fn run(
     let mut candidate_scores: Option<Vec<(i64, f64)>> = None;
 
     let has_text = ast.text.is_some() || ast.phrase.is_some();
+    let mut candidate_addrs: Option<Vec<(i64, tantivy::DocAddress)>> = None;
     let query_obj = if has_text {
         Some(index.build_query(
             ast.text.as_deref().unwrap_or(""),
@@ -34,19 +35,24 @@ pub fn run(
     };
     if has_text {
         let q = query_obj.as_ref().unwrap();
-        let ids = index.candidate_ids(q.as_ref(), 2000)?;
+        let docs = index.candidate_docs(q.as_ref(), 600)?;
         // 候选顺序即相关度顺序，转换为可比较的分数。
-        let scored: Vec<(i64, f64)> = ids
+        let scored: Vec<(i64, f64)> = docs
             .iter()
             .enumerate()
-            .map(|(i, id)| (*id as i64, ids.len() as f64 - i as f64))
+            .map(|(i, (id, _))| (*id as i64, docs.len() as f64 - i as f64))
             .collect();
         candidate_scores = Some(scored);
+        candidate_addrs = Some(
+            docs.into_iter()
+                .map(|(id, addr)| (id as i64, addr))
+                .collect(),
+        );
     }
 
     // 先构建 SQL；文本候选存在时用临时表装载。
     let items: Vec<FileRow> = store.with_conn(|c| {
-        if let Some(scored) = &mut candidate_scores {
+        if let Some(scored) = &candidate_scores {
             c.execute("DROP TABLE IF EXISTS temp.cands", []).ok();
             c.execute("CREATE TEMP TABLE cands(fid INTEGER PRIMARY KEY, sc REAL)", [])
                 .map_err(|e| e.to_string())?;
@@ -170,13 +176,24 @@ pub fn run(
 
     // 附加标签
     let mut items = items;
-    // 命中片段：仅对已提取全文的条目生成（FR06）
+    // 命中片段：复用候选文档地址，零额外查询（FR06）
     if has_text {
-        if let Some(q) = &query_obj {
-            for item in items.iter_mut().take(30) {
-                if item.fulltext_state == "done" {
-                    item.snippet =
-                        index.snippet(q.as_ref(), item.file_id as u64, index.content);
+        if let (Some(q), Some(addrs)) = (&query_obj, &candidate_addrs) {
+            let addr_map: std::collections::HashMap<i64, tantivy::DocAddress> =
+                addrs.iter().map(|(id, a)| (*id, *a)).collect();
+            if let Some(gen) = index.snippet_generator(q.as_ref(), index.content) {
+                let mut done_count = 0;
+                for item in items.iter_mut() {
+                    if done_count >= 30 {
+                        break;
+                    }
+                    if item.fulltext_state != "done" {
+                        continue;
+                    }
+                    if let Some(addr) = addr_map.get(&item.file_id) {
+                        item.snippet = index.snippet_from_addr(&gen, *addr);
+                        done_count += 1;
+                    }
                 }
             }
         }

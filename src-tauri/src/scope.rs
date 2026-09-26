@@ -79,7 +79,8 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
     let mut stmt = c
         .prepare(
             "SELECT s.scope_id, s.path, s.enabled, s.state, s.baseline_at,
-                    (SELECT COUNT(*) FROM files f WHERE f.scope_id = s.scope_id)
+                    (SELECT COUNT(*) FROM files f WHERE f.scope_id = s.scope_id),
+                    s.options_json
              FROM scopes s ORDER BY s.scope_id",
         )
         .map_err(|e| e.to_string())?;
@@ -93,6 +94,7 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
                 // SELECT 列序：baseline_at 第 5 列（可空），files_count 是子查询第 6 列
                 baseline_at: r.get(4)?,
                 files_count: r.get(5)?,
+                options_json: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -141,6 +143,7 @@ pub fn scope_add(
         state: "scanning".into(),
         files_count: 0,
         baseline_at: None,
+        options_json: opts.to_string(),
     })
 }
 
