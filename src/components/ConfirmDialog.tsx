@@ -26,36 +26,14 @@ export function useConfirm() {
     new Promise<boolean>((resolve) => setState({ message, sub, resolve }));
 
   const confirmEl = state ? (
-    <div
-    className="menu-overlay"
-    style={{
-      position: "fixed",
-      inset: 0,
-      zIndex: 80,
-      background: "rgba(17,24,39,0.32)",
-    }}
-  >
-      <div
-      className="confirm-panel"
-      style={{
-        position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        width: "min(420px, 80vw)",
-        background: "#ffffff",
-        border: "1px solid #e5e7eb",
-        borderRadius: 12,
-        boxShadow: "0 16px 48px rgba(0,0,0,0.22)",
-        padding: 18,
-        zIndex: 90,
-      }}
-    >
+    <div className="confirm-overlay">
+      <div className="confirm-panel" role="dialog" aria-modal="true">
         <p className="confirm-msg">{state.message}</p>
         {state.sub ? <p className="muted">{state.sub}</p> : null}
-        <div className="trial-actions" style={{ justifyContent: "flex-end" }}>
+        <div className="confirm-actions">
           <button
             type="button"
+            className="btn"
             onClick={() => {
               state.resolve(false);
               setState(null);
@@ -65,6 +43,7 @@ export function useConfirm() {
           </button>
           <button
             className="btn-primary"
+            autoFocus
             onClick={() => {
               state.resolve(true);
               setState(null);

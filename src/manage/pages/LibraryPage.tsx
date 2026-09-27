@@ -30,6 +30,7 @@ export default function LibraryPage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>收藏与标签</h2>
+      <p className="page-desc">整理常用文件，用标签快速归类与筛选。</p>
       <div className="tab-row">
         <button className={tab === "favorites" ? "tab-active" : ""} onClick={() => setTab("favorites")}>
           收藏（{favs.length}）

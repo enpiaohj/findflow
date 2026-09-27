@@ -24,9 +24,11 @@ interface Props {
   density: Density;
   onDensityChange: (density: Density) => void;
   count: number;
+  /** 结果达到返回上限（实际命中可能更多） */
+  limited: boolean;
 }
 
-export default function FilterBar({ filter, onFilterChange, density, onDensityChange, count }: Props) {
+export default function FilterBar({ filter, onFilterChange, density, onDensityChange, count, limited }: Props) {
   return (
     <div className="filterbar">
       <div className="filterbar-chips">
@@ -41,7 +43,9 @@ export default function FilterBar({ filter, onFilterChange, density, onDensityCh
         ))}
       </div>
       <div className="filterbar-meta">
-        <span className="filterbar-count">共 {count} 项</span>
+        <span className="filterbar-count" title={limited ? "仅显示最相关的前若干项，可继续输入缩小范围" : undefined}>
+          {limited ? `前 ${count} 项` : `共 ${count} 项`}
+        </span>
         <div className="density-switch" role="group" aria-label="显示密度">
           {DENSITIES.map((d) => (
             <button

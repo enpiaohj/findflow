@@ -20,6 +20,7 @@ pub mod scope;
 pub mod search;
 pub mod searchindex;
 pub mod settings;
+pub mod shellicon;
 pub mod tokenizer;
 pub mod updater_cmd;
 pub mod util;
@@ -320,6 +321,8 @@ pub fn run() {
             preview::file_tags_set,
             preview::recents_list,
             preview::file_by_path,
+            shellicon::file_icons,
+            shellicon::file_thumbnail,
             jobs::jobs_list,
             jobs::job_pause,
             jobs::job_resume,

@@ -10,12 +10,14 @@ import {
   updaterInstall,
   hotkeyApply,
 } from "../../api";
+import { getThemePref, setThemePref, type ThemePref } from "../../theme";
 
 export function AppearancePage({ notice }: PageCtx) {
   const [density, setDensity] = useState("compact");
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [hotkeyCommitted, setHotkeyCommitted] = useState("");
   const [blurHide, setBlurHide] = useState(true);
+  const [theme, setTheme] = useState<ThemePref>(getThemePref());
 
   useEffect(() => {
     getSetting<string>("ui.density").then((v) => v && setDensity(v)).catch(() => undefined);
@@ -33,7 +35,36 @@ export function AppearancePage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>外观与快捷键</h2>
+      <p className="page-desc">主题、显示密度与全局快捷键。</p>
       <section className="card">
+        <div className="toggle-row">
+          <div>
+            <b>主题</b>
+            <p className="muted">跟随系统时随 Windows 深色 / 浅色设置自动切换</p>
+          </div>
+          <div className="segmented" role="radiogroup" aria-label="主题">
+            {(
+              [
+                ["system", "跟随系统"],
+                ["light", "浅色"],
+                ["dark", "深色"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                role="radio"
+                aria-checked={theme === id}
+                className={theme === id ? "active" : ""}
+                onClick={() => {
+                  setTheme(id);
+                  setThemePref(id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="toggle-row">
           <div>
             <b>默认显示密度</b>
@@ -104,6 +135,7 @@ export function PrivacyPage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>隐私与安全</h2>
+      <p className="page-desc">FindFlow 默认完全本地运行，你的文件内容不会离开这台电脑。</p>
       <section className="card">
         <div className="toggle-row">
           <div>
@@ -194,6 +226,7 @@ export function UpdatePage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>更新</h2>
+      <p className="page-desc">检查并安装 FindFlow 的新版本。</p>
       <section className="card">
         <div className="toggle-row">
           <div>

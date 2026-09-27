@@ -25,6 +25,44 @@ const JOB_KIND_LABEL: Record<string, string> = {
   duplicates: "重复文件扫描",
 };
 
+const JOB_STATE_LABEL: Record<string, string> = {
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  interrupted: "已中断",
+  running: "运行中",
+  waiting: "等待中",
+  paused: "已暂停",
+};
+
+/** 把任务结果 JSON 转为中文摘要（未知字段不展示，解析失败时原样返回）。 */
+function summarizeResult(raw: string | null): string {
+  if (!raw) return "—";
+  let r: Record<string, unknown>;
+  try {
+    r = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  const n = (k: string) => (typeof r[k] === "number" ? (r[k] as number).toLocaleString() : null);
+  const parts: string[] = [];
+  if (typeof r.error === "string") parts.push(`错误：${r.error}`);
+  if (n("indexed") !== null) parts.push(`已索引 ${n("indexed")} 项`);
+  if (n("extracted") !== null) parts.push(`已提取 ${n("extracted")} 个文件`);
+  if (n("removed") !== null) parts.push(`清理 ${n("removed")} 条过期记录`);
+  if (Array.isArray(r.groups)) parts.push(`找到 ${r.groups.length.toLocaleString()} 组重复文件`);
+  if (r.failed && n("failed") !== "0") parts.push(`失败 ${n("failed")}`);
+  if (r.errors && n("errors") !== "0") parts.push(`${n("errors")} 项无法访问`);
+  return parts.length ? parts.join("，") : "—";
+}
+
+function formatJobTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export default function TasksPage({ notice }: PageCtx) {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [health, setHealth] = useState<IndexHealth | null>(null);
@@ -57,6 +95,7 @@ export default function TasksPage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>任务与诊断</h2>
+      <p className="page-desc">查看后台任务进度与索引健康状况，定位失败原因。</p>
       <div className="health-banner">
         <span className="health-ok">✓</span>
         <span>系统状态</span>
@@ -110,6 +149,7 @@ export default function TasksPage({ notice }: PageCtx) {
           <thead>
             <tr>
               <th>任务</th>
+              <th>完成时间</th>
               <th>状态</th>
               <th>结果</th>
               <th>操作</th>
@@ -119,6 +159,7 @@ export default function TasksPage({ notice }: PageCtx) {
             {recent.map((j) => (
               <tr key={j.jobId}>
                 <td>{JOB_KIND_LABEL[j.kind] ?? j.kind}</td>
+                <td className="muted">{formatJobTime(j.updatedAt)}</td>
                 <td>
                   <span
                     className={
@@ -132,10 +173,12 @@ export default function TasksPage({ notice }: PageCtx) {
                             : "badge-warn")
                     }
                   >
-                    {j.state}
+                    {JOB_STATE_LABEL[j.state] ?? j.state}
                   </span>
                 </td>
-                <td className="muted cell-path">{j.resultJson ?? "—"}</td>
+                <td className="cell-path" title={j.resultJson ?? undefined}>
+                  {summarizeResult(j.resultJson)}
+                </td>
                 <td>
                   {j.state === "failed" ? (
                     <button onClick={() => act(jobRetryFailed(j.jobId), "已重新入队")}>重试失败项</button>

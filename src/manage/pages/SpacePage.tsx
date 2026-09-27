@@ -100,6 +100,7 @@ export default function SpacePage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>空间分析</h2>
+      <p className="page-desc">找出占用空间最多的文件与重复文件，释放磁盘空间。</p>
       <div className="tab-row">
         <button className={tab === "large" ? "tab-active" : ""} onClick={() => setTab("large")}>
           大文件
@@ -134,8 +135,10 @@ export default function SpacePage({ notice }: PageCtx) {
             <tbody>
               {large.map((f) => (
                 <tr key={f.fileId}>
-                  <td>{f.name}</td>
-                  <td className="muted cell-path">{f.path}</td>
+                  <td title={f.name}>{f.name}</td>
+                  <td className="muted cell-path" title={f.path}>
+                    {f.path}
+                  </td>
                   <td className="muted">{formatTime(f.modifiedMs)}</td>
                   <td className="col-right">{formatBytes(f.size)}</td>
                 </tr>

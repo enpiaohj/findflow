@@ -5,16 +5,26 @@ import BatchPage from "./pages/BatchPage";
 import TasksPage from "./pages/TasksPage";
 import LibraryPage from "./pages/LibraryPage";
 import { AppearancePage, PrivacyPage, UpdatePage } from "./pages/SettingsPages";
+import {
+  ChartIcon,
+  LayersIcon,
+  MonitorIcon,
+  PulseIcon,
+  RefreshIcon,
+  SearchIcon,
+  ShieldIcon,
+  StarIcon,
+} from "../components/Icons";
 
 const NAV = [
-  { id: "index", label: "索引与搜索", el: IndexPage },
-  { id: "space", label: "空间分析", el: SpacePage },
-  { id: "batch", label: "批量处理", el: BatchPage },
-  { id: "tasks", label: "任务与诊断", el: TasksPage },
-  { id: "library", label: "收藏与标签", el: LibraryPage },
-  { id: "appearance", label: "外观与快捷键", el: AppearancePage },
-  { id: "privacy", label: "隐私与安全", el: PrivacyPage },
-  { id: "update", label: "更新", el: UpdatePage },
+  { id: "index", label: "索引与搜索", el: IndexPage, icon: SearchIcon },
+  { id: "space", label: "空间分析", el: SpacePage, icon: ChartIcon },
+  { id: "batch", label: "批量处理", el: BatchPage, icon: LayersIcon },
+  { id: "tasks", label: "任务与诊断", el: TasksPage, icon: PulseIcon },
+  { id: "library", label: "收藏与标签", el: LibraryPage, icon: StarIcon },
+  { id: "appearance", label: "外观与快捷键", el: AppearancePage, icon: MonitorIcon },
+  { id: "privacy", label: "隐私与安全", el: PrivacyPage, icon: ShieldIcon },
+  { id: "update", label: "更新", el: UpdatePage, icon: RefreshIcon },
 ] as const;
 
 export type PageCtx = { notice: (m: string) => void; refresh: () => void };
@@ -36,6 +46,7 @@ export default function ManageBody({ notice, initialPage }: { notice: (m: string
             className={"nav-item" + (page === n.id ? " nav-active" : "")}
             onClick={() => setPage(n.id)}
           >
+            <n.icon size={18} />
             {n.label}
           </button>
         ))}

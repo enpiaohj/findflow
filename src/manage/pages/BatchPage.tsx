@@ -97,6 +97,7 @@ export default function BatchPage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>批量处理</h2>
+      <p className="page-desc">批量重命名与移动：先预演再执行，每一项结果可追溯、可撤销。</p>
       <div className="tab-row">
         <button className={tab === "rename" ? "tab-active" : ""} onClick={() => setTab("rename")}>
           批量重命名

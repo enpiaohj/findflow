@@ -73,8 +73,8 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
   ];
 
   // 跟随触发位置弹出，并收在窗口范围内
-  const left = pos ? Math.min(pos.x, window.innerWidth - 250) : window.innerWidth / 2 - 110;
-  const top = pos ? Math.min(pos.y, window.innerHeight - 380) : window.innerHeight / 2 - 160;
+  const left = pos ? Math.max(8, Math.min(pos.x, window.innerWidth - 246)) : window.innerWidth / 2 - 115;
+  const top = pos ? Math.max(8, Math.min(pos.y, window.innerHeight - 500)) : window.innerHeight / 2 - 200;
 
   return (
     <div className="menu-overlay" onClick={onClose}>

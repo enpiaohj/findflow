@@ -29,10 +29,22 @@ interface TrialScanResultLike {
   sample: string[];
 }
 
+/** 范围状态的中文显示。 */
+const SCOPE_STATES: Record<string, string> = {
+  idle: "已就绪",
+  scanning: "扫描中",
+  offline: "已停用",
+};
+
 export default function IndexPage({ notice }: PageCtx) {
   const { confirm, confirmEl } = useConfirm();
   const [scopes, setScopes] = useState<ScopeInfo[]>([]);
-  const [health, setHealth] = useState<{ totalFiles: number; fulltextDone: number; ocrDone: number } | null>(null);
+  const [health, setHealth] = useState<{
+    totalFiles: number;
+    fulltextDone: number;
+    ocrDone: number;
+    outboxPending: number;
+  } | null>(null);
   const [trial, setTrial] = useState<TrialScanResultLike | null>(null);
   const [busy, setBusy] = useState(false);
   const [usage, setUsage] = useState<{ dataDir: string; dbBytes: number; indexBytes: number } | null>(null);
@@ -40,6 +52,7 @@ export default function IndexPage({ notice }: PageCtx) {
     scopeId: number;
     dirs: string;
     exts: string;
+    includeHidden: boolean;
   } | null>(null);
 
   const reload = () => {
@@ -86,15 +99,20 @@ export default function IndexPage({ notice }: PageCtx) {
   return (
     <div className="page">
       <h2>索引与搜索</h2>
-      <div className="health-banner">
-        <span className="health-ok">✓</span>
-        <span>索引正常</span>
+      <p className="page-desc">管理 FindFlow 的文件索引范围与搜索行为，让搜索更快、更准确。</p>
+      <div className={"health-banner" + (health && health.outboxPending > 0 ? " busy" : "")}>
+        <span className="health-ok">{health && health.outboxPending > 0 ? "↻" : "✓"}</span>
+        <b>
+          {health && health.outboxPending > 0
+            ? `正在更新索引（剩余 ${health.outboxPending.toLocaleString()} 项）`
+            : "索引正常"}
+        </b>
         <span className="health-sep" />
-        <span>已索引 {health?.totalFiles ?? 0} 个文件</span>
+        <span>已索引 {(health?.totalFiles ?? 0).toLocaleString()} 个文件</span>
         <span className="health-sep" />
-        <span>全文 {health?.fulltextDone ?? 0}</span>
+        <span>全文 {(health?.fulltextDone ?? 0).toLocaleString()}</span>
         <span className="health-sep" />
-        <span>OCR {health?.ocrDone ?? 0}</span>
+        <span>OCR {(health?.ocrDone ?? 0).toLocaleString()}</span>
       </div>
 
       <section className="card">
@@ -121,7 +139,7 @@ export default function IndexPage({ notice }: PageCtx) {
             <div className="scope-info">
               <div className="scope-path">{s.path}</div>
               <div className="scope-meta">
-                {s.filesCount} 个文件 · {s.state}
+                {s.filesCount.toLocaleString()} 个文件 · {SCOPE_STATES[s.state] ?? s.state}
                 {s.baselineAt ? ` · 基线 ${new Date(s.baselineAt).toLocaleString()}` : ""}
               </div>
             </div>
@@ -139,14 +157,16 @@ export default function IndexPage({ notice }: PageCtx) {
                 onClick={() => {
                   let dirs = '';
                   let exts = '';
+                  let includeHidden = false;
                   try {
                     const o = JSON.parse(s.optionsJson || '{}');
                     dirs = (o.exclude_dirs ?? []).join(', ');
                     exts = (o.exclude_exts ?? []).join(', ');
+                    includeHidden = !!o.include_hidden;
                   } catch {
                     /* 忽略解析失败 */
                   }
-                  setExcludeEdit({ scopeId: s.scopeId, dirs, exts });
+                  setExcludeEdit({ scopeId: s.scopeId, dirs, exts, includeHidden });
                 }}
               >
                 排除规则
@@ -238,12 +258,14 @@ export default function IndexPage({ notice }: PageCtx) {
                       options: {
                         exclude_dirs: dirs,
                         exclude_exts: exts,
-                        include_hidden: false,
+                        include_hidden: excludeEdit.includeHidden,
                       },
                     })
                   )
+                  // 校准会移除新排除的条目并补入新纳入的条目
+                  .then(() => recalibrateScope(excludeEdit.scopeId))
                   .then(() => {
-                    notice('排除规则已保存，重新扫描后生效');
+                    notice('排除规则已保存，正在后台校准该范围');
                     setExcludeEdit(null);
                     reload();
                   })

@@ -5,7 +5,7 @@ import TitleBar from "../components/TitleBar";
 import ResultList from "../components/ResultList";
 import FooterBar from "../components/FooterBar";
 import { Toast } from "../components/Toast";
-import { SearchIcon } from "../components/Icons";
+import { ArrowLeftIcon, SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
@@ -51,8 +51,10 @@ export default function QuickApp() {
   const [elapsed, setElapsed] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  // 预览始终展示当前选中项，方向键切换即切换预览文件
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkey, setHotkey] = useState("Alt+Q");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,7 +93,7 @@ export default function QuickApp() {
       if (!focused) {
         // 设置视图打开期间不清词（用户可能正在编辑）；普通搜索态按 FR01 清空敏感词
         if (!settingsOpenRef.current) setQuery("");
-        setPreviewPath(null);
+        setPreviewOpen(false);
         setMenuFor(null);
         setSortOpen(false);
       } else if (!settingsOpenRef.current) {
@@ -165,10 +167,24 @@ export default function QuickApp() {
         if (event.key === "Escape") setMenuFor(null);
         return;
       }
-      if (previewPath) {
+      if (previewOpen) {
         if (event.key === "Escape" || event.key === " ") {
           event.preventDefault();
-          setPreviewPath(null);
+          setPreviewOpen(false);
+        } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+          event.preventDefault();
+          setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
+        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          event.preventDefault();
+          setSelectedIndex((index) => Math.max(index - 1, 0));
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          const it = items[selectedIndex];
+          if (it) {
+            actionOpen(it.path)
+              .then((m) => notice(m))
+              .catch((e) => notice(String(e)));
+          }
         }
         return;
       }
@@ -205,7 +221,7 @@ export default function QuickApp() {
       } else if (event.key === " " && !typing) {
         event.preventDefault();
         const it = items[selectedIndex];
-        if (it) setPreviewPath(it.path);
+        if (it) setPreviewOpen(true);
       } else if (event.key === "Escape") {
         event.preventDefault();
         if (query) {
@@ -232,7 +248,7 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, previewPath, menuFor, settingsOpen, notice]
+    [items, selectedIndex, query, previewOpen, menuFor, settingsOpen, notice]
   );
 
   return (
@@ -240,22 +256,11 @@ export default function QuickApp() {
       <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen ? (
         <>
-          <div
-            className="settings-top"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "10px 16px",
-              borderBottom: "1px solid #e5e7eb",
-              background: "#ffffff",
-              boxSizing: "border-box",
-              width: "100%",
-            }}
-          >
-            <b>设置</b>
+          <div className="settings-top">
             <button className="settings-back" onClick={() => setSettingsOpen(false)}>
-              返回搜索（Esc）
+              <ArrowLeftIcon />
+              返回搜索
+              <kbd>Esc</kbd>
             </button>
           </div>
           <ManageBody notice={notice} />
@@ -308,18 +313,23 @@ export default function QuickApp() {
             density={density}
             onDensityChange={changeDensity}
             count={items.length}
+            limited={items.length >= 200}
           />
           <div className="result-status">
-            {`共 ${items.length} 项 · 索引 ${total} 条 · ${elapsed} ms`}
+            {`索引 ${total.toLocaleString()} 条 · 用时 ${elapsed} ms`}
           </div>
           <ResultList
             items={items}
             density={density}
             selectedIndex={selectedIndex}
+            sort={sort}
+            onSort={setSort}
             onSelect={setSelectedIndex}
             onNotice={notice}
-            onOpen={(item) => setPreviewPath(item.path)}
-            onMenu={(item) => setMenuFor(item)}
+            onMenu={(item, pos) => {
+              setMenuPos(pos);
+              setMenuFor(item);
+            }}
             onOpenSettings={() => setSettingsOpen(true)}
           />
           <FooterBar />
@@ -328,13 +338,14 @@ export default function QuickApp() {
       {menuFor ? (
         <ResultMenu
           item={menuFor}
+          pos={menuPos}
           onClose={() => setMenuFor(null)}
           onNotice={notice}
           onRefresh={runSearch}
         />
       ) : null}
-      {previewPath ? (
-        <PreviewOverlay path={previewPath} onClose={() => setPreviewPath(null)} onNotice={notice} />
+      {previewOpen && items[selectedIndex] ? (
+        <PreviewOverlay item={items[selectedIndex]} onClose={() => setPreviewOpen(false)} onNotice={notice} />
       ) : null}
       {toast ? <Toast message={toast} /> : null}
     </div>
