@@ -13,7 +13,7 @@ pub struct SearchOutcome {
 }
 
 /// 执行一次搜索：Tantivy 提供候选 → SQLite 过滤补全 → 综合排序（设计文档 §9）。
-/// `scope_id` 非 None 且 > 0 时仅在该索引范围内检索（搜索窗「位置」筛选）。
+/// `scope_id` 非 None 且 > 0 时仅浏览该索引范围；关键词搜索由前端始终传 None。
 pub fn run(
     store: &crate::settings::SettingsStore,
     index: &crate::searchindex::SearchIndex,
@@ -356,9 +356,9 @@ pub async fn cmd_search(
 mod tests {
     use super::*;
 
-    /// 位置筛选：scope_id 限定结果与总数；None 返回全部。
+    /// 空搜索浏览：scope_id 限定范围，名称与大小排序保持稳定。
     #[test]
-    fn scope_filter_limits_results_and_total() {
+    fn scope_filter_and_browse_sorts() {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
         let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
@@ -368,28 +368,51 @@ mod tests {
                 [],
             )
             .unwrap();
-            for (sid, name) in [(1, "报告a.txt"), (2, "报告b.txt")] {
+            for (sid, name, size) in [
+                (1, "zeta.txt", 30_i64),
+                (1, "alpha.txt", 10_i64),
+                (2, "beta.txt", 20_i64),
+            ] {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind) VALUES (?1, ?2, ?3, 'doc')",
-                    rusqlite::params![sid, name, format!("D:/x/{name}")],
+                    "INSERT INTO files(scope_id, name, path, kind, size) VALUES (?1, ?2, ?3, 'doc', ?4)",
+                    rusqlite::params![sid, name, format!("D:/x/{name}"), size],
                 )
                 .unwrap();
             }
         });
 
-        let ast = QueryAst::default();
-        let all = run(&store, &index, &ast, 10, None).unwrap();
-        assert_eq!(all.items.len(), 2);
-        assert_eq!(all.total, 2);
+        let by_size = QueryAst {
+            sort: SortMode::Size,
+            ..Default::default()
+        };
+        let all = run(&store, &index, &by_size, 10, None).unwrap();
+        assert_eq!(
+            all.items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["zeta.txt", "beta.txt", "alpha.txt"]
+        );
+        assert_eq!(all.total, 3);
 
-        let scoped = run(&store, &index, &ast, 10, Some(1)).unwrap();
-        assert_eq!(scoped.items.len(), 1);
-        assert_eq!(scoped.items[0].path, "D:/x/报告a.txt");
-        assert_eq!(scoped.total, 1);
+        let by_name = QueryAst {
+            sort: SortMode::Name,
+            ..Default::default()
+        };
+        let scoped = run(&store, &index, &by_name, 10, Some(1)).unwrap();
+        assert_eq!(
+            scoped
+                .items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha.txt", "zeta.txt"]
+        );
+        assert_eq!(scoped.total, 2);
 
         // 不存在的位置：结果为空
-        let none = run(&store, &index, &ast, 10, Some(99)).unwrap();
-        assert_eq!(none.items.len(), 0);
+        let none = run(&store, &index, &by_name, 10, Some(99)).unwrap();
+        assert!(none.items.is_empty());
         assert_eq!(none.total, 0);
     }
 }
