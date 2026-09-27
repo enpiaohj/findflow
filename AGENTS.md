@@ -27,8 +27,7 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust + rusqlite（SQLite WA
 | 桌面开发运行 | `npm run tauri dev` |
 | 完整桌面打包 | `npm run tauri build` |
 | Rust 单元测试 | `cd src-tauri && cargo test` |
-| 生成应用图标源图 | `node scripts/generate-app-icon.mjs` |
-| 生成 Tauri 图标集 | `npx tauri icon src-tauri/app-icon.png` |
+| 生成全套应用图标（源文件 `src-tauri/icons/source/*.svg`，需本机 Chrome 或 Edge） | `node scripts/generate-app-icon.mjs` |
 | 性能基准 | `cd src-tauri && cargo run --release --bin bench_gen -- --count 1000000` |
 
 ## 产品闭环底线（来自设计文档 §10.2，任何阶段不得违反）
