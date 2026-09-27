@@ -21,15 +21,20 @@ import {
   scanStatus,
   scopesList,
   type FileRow,
-  type ScopeInfo,
 } from "../api";
 import type { Density } from "../types";
+import {
+  DEFAULT_START_VIEW,
+  LEGACY_START_LOCATION_KEY,
+  START_VIEW_KEY,
+  getStartViewQueryDefaults,
+  resolveStartView,
+  type StartViewSetting,
+} from "../startView";
 
 const DENSITY_KEY = "ui.density";
 // 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
 const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
-// 启动时显示的位置："all" 或索引范围 scopeId（设置「启动视图」控制，搜索窗内可临时切换）
-const START_LOCATION_KEY = "ui.startLocation";
 
 const FILTER_QUERY: Record<FilterId, string> = {
   all: "",
@@ -49,7 +54,6 @@ const SORTS: { id: string; label: string }[] = [
 export default function QuickApp() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterId>("all");
-  const [sort, setSort] = useState("relevance");
   const [sortOpen, setSortOpen] = useState(false);
   const [density, setDensity] = useState<Density>("compact");
   const [items, setItems] = useState<FileRow[]>([]);
@@ -64,9 +68,12 @@ export default function QuickApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [clearOnHide, setClearOnHide] = useState(false);
-  // 位置筛选：0 = 所有位置，>0 = 指定索引范围 scopeId
-  const [scopes, setScopes] = useState<ScopeInfo[]>([]);
-  const [locationId, setLocationId] = useState(0);
+  const [startView, setStartViewState] = useState<StartViewSetting>({
+    ...DEFAULT_START_VIEW,
+  });
+  const [startViewReady, setStartViewReady] = useState(false);
+  const [searchSort, setSearchSort] = useState("relevance");
+  const [browseSortOverride, setBrowseSortOverride] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -77,6 +84,30 @@ export default function QuickApp() {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+
+  const refreshStartView = useCallback(async () => {
+    searchGen.current += 1;
+    setStartViewReady(false);
+    try {
+      const [nextScopes, currentValue, legacyValue] = await Promise.all([
+        scopesList(),
+        getSetting<unknown>(START_VIEW_KEY),
+        getSetting<unknown>(LEGACY_START_LOCATION_KEY),
+      ]);
+      const resolved = resolveStartView(currentValue, legacyValue, nextScopes);
+      setStartViewState(resolved.setting);
+      setBrowseSortOverride(null);
+      if (resolved.needsPersist) {
+        setSetting(START_VIEW_KEY, resolved.setting).catch((error) =>
+          notice("启动列表设置迁移失败：" + String(error)),
+        );
+      }
+    } catch (error) {
+      notice("读取启动列表设置失败：" + String(error));
+    } finally {
+      setStartViewReady(true);
+    }
+  }, [notice]);
 
   useEffect(() => {
     getSetting<string>(DENSITY_KEY)
@@ -92,17 +123,12 @@ export default function QuickApp() {
     getSetting<boolean>(CLEAR_ON_HIDE_KEY)
       .then((v) => setClearOnHide(!!v))
       .catch(() => undefined);
-    getSetting<string | number>(START_LOCATION_KEY)
-      .then((v) => {
-        if (typeof v === "number" && v > 0) setLocationId(v);
-      })
-      .catch(() => undefined);
   }, []);
 
-  // 索引位置列表：启动与关闭设置视图后刷新
+  // 索引位置与启动列表设置：启动与关闭设置视图后刷新
   useEffect(() => {
-    if (!settingsOpen) scopesList().then(setScopes).catch(() => undefined);
-  }, [settingsOpen]);
+    if (!settingsOpen) void refreshStartView();
+  }, [refreshStartView, settingsOpen]);
 
   // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
   const settingsOpenRef = useRef(false);
@@ -130,10 +156,23 @@ export default function QuickApp() {
     return () => void unlistenP.then((f) => f());
   }, []);
 
-  // 启动位置已被移除 / 停用时回退为所有位置
-  const activeLocation = scopes.some((s) => s.scopeId === locationId && s.enabled)
-    ? locationId
-    : 0;
+  const hasQuery = query.trim().length > 0;
+  const queryDefaults = getStartViewQueryDefaults(startView, hasQuery);
+  const browseDefaultSort = filter === "recent" ? "modified" : queryDefaults.sort;
+  const activeSort = hasQuery ? searchSort : browseSortOverride ?? browseDefaultSort;
+  const visibleSorts = hasQuery ? SORTS : SORTS.filter((option) => option.id !== "relevance");
+  const browseNoScope = !hasQuery && startView.mode === "index" && startView.scopeId === null;
+
+  const changeSort = useCallback(
+    (next: string) => {
+      if (hasQuery) {
+        setSearchSort(next);
+      } else {
+        setBrowseSortOverride(next === "relevance" ? null : next);
+      }
+    },
+    [hasQuery],
+  );
 
   const changeDensity = useCallback((next: Density) => {
     setDensity(next);
@@ -141,22 +180,41 @@ export default function QuickApp() {
   }, []);
 
   const runSearch = useCallback(() => {
+    if (!startViewReady) return;
+
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
-    // 关键词搜索始终覆盖全部索引位置；位置仅决定空查询时浏览列表显示的范围
-    const browseScope = query.trim() ? 0 : activeLocation;
+    if (browseNoScope) {
+      searchGen.current += 1;
+      setItems([]);
+      setTotal(0);
+      setElapsed(0);
+      return;
+    }
+
+    const scopeId = queryDefaults.scopeId;
     const gen = ++searchGen.current;
-    apiSearch(q, sort === "relevance" ? undefined : sort, 200, browseScope || undefined)
-      .then((r) => {
+    apiSearch(q, activeSort === "relevance" ? undefined : activeSort, 200, scopeId)
+      .then((response) => {
         if (gen !== searchGen.current) return;
-        setItems(r.items);
-        setTotal(r.total);
-        setElapsed(r.elapsedMs);
+        setItems(response.items);
+        setTotal(response.total);
+        setElapsed(response.elapsedMs);
       })
-      .catch((e) => {
+      .catch((error) => {
         if (gen !== searchGen.current) return;
-        notice("搜索失败：" + String(e));
+        notice("搜索失败：" + String(error));
       });
-  }, [query, filter, sort, activeLocation, notice]);
+  }, [
+    activeSort,
+    filter,
+    hasQuery,
+    notice,
+    query,
+    queryDefaults.scopeId,
+    startView.mode,
+    startView.scopeId,
+    startViewReady,
+  ]);
 
   // 搜索：50ms 防抖（设计文档 §3.2）
   useEffect(() => {
@@ -166,7 +224,7 @@ export default function QuickApp() {
 
   useEffect(() => {
     setSelectedIndex(0);
-  }, [query, filter, sort, activeLocation]);
+  }, [activeSort, filter, query, startView.mode, startView.scopeId]);
 
   // 索引进度仅在设置内查看；扫描结束后刷新索引总数
   const wasScanning = useRef(false);
@@ -319,21 +377,21 @@ export default function QuickApp() {
                 if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false);
               }}
             >
-              <button className="sort-btn" onClick={() => setSortOpen((v) => !v)}>
-                {SORTS.find((s) => s.id === sort)?.label} ▾
+              <button className="sort-btn" onClick={() => setSortOpen((value) => !value)}>
+                {SORTS.find((option) => option.id === activeSort)?.label} ▾
               </button>
               {sortOpen ? (
                 <div className="sort-menu">
-                  {SORTS.map((s) => (
+                  {visibleSorts.map((option) => (
                     <button
-                      key={s.id}
-                      className={s.id === sort ? "active" : ""}
+                      key={option.id}
+                      className={option.id === activeSort ? "active" : ""}
                       onClick={() => {
-                        setSort(s.id);
+                        changeSort(option.id);
                         setSortOpen(false);
                       }}
                     >
-                      {s.label}
+                      {option.label}
                     </button>
                   ))}
                 </div>
@@ -348,10 +406,6 @@ export default function QuickApp() {
             onDensityChange={changeDensity}
             count={items.length}
             limited={items.length >= 200}
-            scopes={scopes}
-            locationId={activeLocation}
-            onLocationChange={setLocationId}
-            locationDisabled={!!query.trim()}
           />
           <div className="result-status">
             {`索引 ${total.toLocaleString()} 条 · 用时 ${elapsed} ms`}
@@ -360,8 +414,8 @@ export default function QuickApp() {
             items={items}
             density={density}
             selectedIndex={selectedIndex}
-            sort={sort}
-            onSort={setSort}
+            sort={activeSort}
+            onSort={changeSort}
             onSelect={setSelectedIndex}
             onNotice={notice}
             onMenu={(item, pos) => {
@@ -369,6 +423,7 @@ export default function QuickApp() {
               setMenuFor(item);
             }}
             onOpenSettings={() => setSettingsOpen(true)}
+            emptyReason={browseNoScope ? "no-scope" : undefined}
           />
           <FooterBar />
         </>

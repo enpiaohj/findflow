@@ -14,6 +14,7 @@ interface Props {
   onNotice: (message: string) => void;
   onMenu: (item: FileRow, pos?: { x: number; y: number }) => void;
   onOpenSettings?: () => void;
+  emptyReason?: "no-scope";
 }
 
 /** 所在目录（去掉文件名）。 */
@@ -57,6 +58,7 @@ export default function ResultList({
   onNotice,
   onMenu,
   onOpenSettings,
+  emptyReason,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -67,11 +69,16 @@ export default function ResultList({
   }, [selectedIndex]);
 
   if (items.length === 0) {
+    const noScope = emptyReason === "no-scope";
     return (
       <div className="result-empty">
-        <p className="result-empty-title">没有匹配的结果</p>
+        <p className="result-empty-title">
+          {noScope ? "没有启用的索引位置" : "没有匹配的结果"}
+        </p>
         <p className="result-empty-hint">
-          尝试更短的关键词，或先把常用目录加入索引范围。
+          {noScope
+            ? "请在设置中启用或添加一个索引位置。"
+            : "尝试更短的关键词，或先把常用目录加入索引范围。"}
         </p>
         {onOpenSettings ? (
           <button className="btn-primary result-empty-btn" onClick={onOpenSettings}>

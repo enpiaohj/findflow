@@ -356,33 +356,6 @@ textarea {
   font-weight: 600;
 }
 
-/* 搜索位置下拉（所有位置 / 各索引位置） */
-.location-select {
-  height: 30px;
-  max-width: 200px;
-  padding: 0 10px;
-  border-radius: 15px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  font-size: 13px;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.location-select:hover {
-  background: var(--surface-3);
-}
-
-.location-select:focus {
-  border-color: var(--accent);
-  outline: none;
-}
-
-.location-select:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 .filterbar-meta {
   display: flex;
   align-items: center;

@@ -1,4 +1,3 @@
-import type { ScopeInfo } from "../api";
 import type { Density } from "../types";
 
 export const FILTERS = [
@@ -27,12 +26,6 @@ interface Props {
   count: number;
   /** 结果达到返回上限（实际命中可能更多） */
   limited: boolean;
-  /** 索引位置；locationId 为 0 表示所有位置 */
-  scopes: ScopeInfo[];
-  locationId: number;
-  onLocationChange: (scopeId: number) => void;
-  /** 已输入搜索词：关键词搜索始终搜全部位置，位置选择置灰 */
-  locationDisabled: boolean;
 }
 
 export default function FilterBar({
@@ -42,31 +35,10 @@ export default function FilterBar({
   onDensityChange,
   count,
   limited,
-  scopes,
-  locationId,
-  onLocationChange,
-  locationDisabled,
 }: Props) {
   return (
     <div className="filterbar">
       <div className="filterbar-chips">
-        <select
-          className="location-select"
-          value={locationId}
-          disabled={locationDisabled}
-          onChange={(e) => onLocationChange(Number(e.target.value))}
-          title={locationDisabled ? "关键词搜索始终搜全部位置；位置仅用于未输入时的列表" : "未输入搜索词时列表显示的位置"}
-          aria-label="列表位置"
-        >
-          <option value={0}>所有位置</option>
-          {scopes
-            .filter((s) => s.enabled)
-            .map((s) => (
-              <option key={s.scopeId} value={s.scopeId}>
-                {s.path}
-              </option>
-            ))}
-        </select>
         {FILTERS.map((f) => (
           <button
             key={f.id}
