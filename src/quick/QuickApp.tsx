@@ -24,6 +24,8 @@ import {
 import type { Density } from "../types";
 
 const DENSITY_KEY = "ui.density";
+// 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
+const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
 
 const FILTER_QUERY: Record<FilterId, string> = {
   all: "",
@@ -57,6 +59,7 @@ export default function QuickApp() {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkey, setHotkey] = useState("Alt+Q");
+  const [clearOnHide, setClearOnHide] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -79,6 +82,9 @@ export default function QuickApp() {
         if (v) setHotkey(v);
       })
       .catch(() => undefined);
+    getSetting<boolean>(CLEAR_ON_HIDE_KEY)
+      .then((v) => setClearOnHide(!!v))
+      .catch(() => undefined);
   }, []);
 
   // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
@@ -86,13 +92,17 @@ export default function QuickApp() {
   useEffect(() => {
     settingsOpenRef.current = settingsOpen;
   }, [settingsOpen]);
+  const clearOnHideRef = useRef(false);
+  useEffect(() => {
+    clearOnHideRef.current = clearOnHide;
+  }, [clearOnHide]);
 
   useEffect(() => {
     const win = getCurrentWindow();
     const unlistenP = win.onFocusChanged(({ payload: focused }) => {
       if (!focused) {
-        // 设置视图打开期间不清词（用户可能正在编辑）；普通搜索态按 FR01 清空敏感词
-        if (!settingsOpenRef.current) setQuery("");
+        // 仅在用户开启隐私选项时清空搜索词；设置视图打开期间一律保留（用户可能正在编辑）
+        if (!settingsOpenRef.current && clearOnHideRef.current) setQuery("");
         setPreviewOpen(false);
         setMenuFor(null);
         setSortOpen(false);

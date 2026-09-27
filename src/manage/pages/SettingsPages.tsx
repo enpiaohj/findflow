@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import type { PageCtx } from "../ManageBody";
 import {
   getSetting,
@@ -17,6 +18,7 @@ export function AppearancePage({ notice }: PageCtx) {
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [hotkeyCommitted, setHotkeyCommitted] = useState("");
   const [blurHide, setBlurHide] = useState(true);
+  const [clearOnHide, setClearOnHide] = useState(false);
   const [theme, setTheme] = useState<ThemePref>(getThemePref());
 
   useEffect(() => {
@@ -30,6 +32,7 @@ export function AppearancePage({ notice }: PageCtx) {
       })
       .catch(() => undefined);
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
+    getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
   }, []);
 
   return (
@@ -116,6 +119,20 @@ export function AppearancePage({ notice }: PageCtx) {
             onChange={(e) => {
               setBlurHide(e.target.checked);
               setSetting("ui.blurHide", e.target.checked).catch(() => undefined);
+            }}
+          />
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>隐藏时清空搜索词</b>
+            <p className="muted">开启后窗口隐藏即清空搜索词（避免敏感词残留）；默认关闭，打开文件返回后保留上次搜索</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={clearOnHide}
+            onChange={(e) => {
+              setClearOnHide(e.target.checked);
+              setSetting("ui.clearOnHide", e.target.checked).catch(() => undefined);
             }}
           />
         </div>
@@ -210,6 +227,14 @@ export function PrivacyPage({ notice }: PageCtx) {
 export function UpdatePage({ notice }: PageCtx) {
   const [status, setStatus] = useState<string>("点击检查更新");
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    // 版本号从应用元数据读取，避免写死后与实际版本不一致
+    getVersion()
+      .then(setVersion)
+      .catch(() => undefined);
+  }, []);
 
   const check = () => {
     setBusy(true);
@@ -231,7 +256,7 @@ export function UpdatePage({ notice }: PageCtx) {
         <div className="toggle-row">
           <div>
             <b>当前版本</b>
-            <p className="muted">v0.2.0 · 更新包经 minisign 签名校验，迁移失败自动回滚</p>
+            <p className="muted">{version ? `v${version}` : "读取中…"} · 更新包经 minisign 签名校验，迁移失败自动回滚</p>
           </div>
         </div>
         <div className="trial-actions">
