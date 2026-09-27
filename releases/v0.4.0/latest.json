@@ -1,0 +1,11 @@
+{
+  "version": "0.4.0",
+  "notes": "FindFlow v0.4.0：根治运行无响应（监听自我循环、校准全量重建），修正索引删除失效等逻辑缺陷；系统文件图标与缩略图、深色模式、新应用图标与界面深度改版。",
+  "pub_date": "2026-09-27T09:23:47Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ3JCaWxBbUdZWU04ZnRVWXlEdzRBbW9RT2l3L05TdnpoQ0dYSE54OHRsNGZWUXkrcnArd0ZwdlFlbzRLYXY5WUFNUGVIbzRxSEtCdzFmTXlKM1ZxM2dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNTAwOTk4CWZpbGU6RmluZEZsb3dfMC40LjBfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4wCjBSV1FaL1Fzc0xwWkdnUVJ4YWF5SlB3NVBqQ2RrR0lNSjJqTWloWmRaM1cwOTBhbm5zSnlJRXV3Wnp6RDVyUGVuWFhYOHM2RkJHdUZzS1FOSkpGSEJRPT0K",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.4.0/FindFlow-v0.4.0-win-x64-setup.exe"
+    }
+  }
+}
