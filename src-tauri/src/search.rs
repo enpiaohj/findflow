@@ -57,9 +57,13 @@ pub fn run(
             c.execute("CREATE TEMP TABLE cands(fid INTEGER PRIMARY KEY, sc REAL)", [])
                 .map_err(|e| e.to_string())?;
             c.execute("BEGIN", []).map_err(|e| e.to_string())?;
-            for (fid, sc) in scored.iter() {
-                c.execute("INSERT OR REPLACE INTO cands VALUES(?1,?2)", params![fid, sc])
+            {
+                let mut ins = c
+                    .prepare("INSERT OR REPLACE INTO cands VALUES(?1,?2)")
                     .map_err(|e| e.to_string())?;
+                for (fid, sc) in scored.iter() {
+                    ins.execute(params![fid, sc]).map_err(|e| e.to_string())?;
+                }
             }
             c.execute("COMMIT", []).map_err(|e| e.to_string())?;
         }
@@ -202,7 +206,7 @@ pub fn run(
     store.with_conn(|c| {
         for item in &mut items {
             let mut stmt = c
-                .prepare(
+                .prepare_cached(
                     "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.tag_id WHERE ft.file_id=?1",
                 )
                 .map_err(|e| e.to_string())?;
@@ -245,11 +249,7 @@ pub fn run(
         items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    let total: i64 = store.with_conn(|c| {
-        // 估算总数（UI 显示“共 N 项”）：limit 上限时提示滚动加载即可。
-        c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
-            .map_err(|e| e.to_string())
-    })?;
+    let total = cached_total(store)?;
     let _ = &index;
     Ok(SearchOutcome {
         items,
@@ -258,13 +258,30 @@ pub fn run(
     })
 }
 
+/// 索引总数（UI 显示“共 N 项”）：百万级 COUNT(*) 需数十毫秒，每次按键都算会拖慢输入，
+/// 缓存 10 秒即可满足显示需要。
+fn cached_total(store: &crate::settings::SettingsStore) -> Result<i64, String> {
+    static TOTAL: std::sync::Mutex<Option<(Instant, i64)>> = std::sync::Mutex::new(None);
+    let mut cache = TOTAL.lock().unwrap();
+    if let Some((at, n)) = *cache {
+        if at.elapsed() < std::time::Duration::from_secs(10) {
+            return Ok(n);
+        }
+    }
+    let n: i64 = store.with_conn(|c| {
+        c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    })?;
+    *cache = Some((Instant::now(), n));
+    Ok(n)
+}
+
 fn recency_score(store: &crate::settings::SettingsStore, path: &str) -> f64 {
     let last: Option<String> = store.with_conn(|c| {
-        c.query_row(
+        c.prepare_cached(
             "SELECT happened_at FROM recent_actions WHERE path=?1 ORDER BY id DESC LIMIT 1",
-            [path],
-            |r| r.get(0),
         )
+        .and_then(|mut s| s.query_row([path], |r| r.get(0)))
         .ok()
     });
     match last {

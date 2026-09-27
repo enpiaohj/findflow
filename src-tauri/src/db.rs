@@ -165,6 +165,8 @@ fn configure(conn: &Connection) -> Result<(), rusqlite::Error> {
     // 读性能：页缓存 8MB + mmap 256MB（WAL 模式下安全）
     conn.pragma_update(None, "cache_size", -8000)?;
     conn.pragma_update(None, "mmap_size", 268_435_456)?;
+    // 检查点完成后把 WAL 文件截回 64MB 以内，避免长期运行后 WAL 无限膨胀
+    conn.pragma_update(None, "journal_size_limit", 67_108_864)?;
     Ok(())
 }
 

@@ -2,30 +2,63 @@ use tauri::Manager;
 
 use crate::models::IndexHealth;
 
+/// 全表聚合结果缓存：百万级文件时每次全表扫描需数百毫秒，设置页 3 秒轮询无需每次重算。
+struct HeavyStats {
+    at: std::time::Instant,
+    total: i64,
+    ft_done: i64,
+    ft_failed: i64,
+    ocr_done: i64,
+    ocr_failed: i64,
+    last_cp: i64,
+}
+
+static HEAVY: std::sync::Mutex<Option<HeavyStats>> = std::sync::Mutex::new(None);
+const HEAVY_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
 #[tauri::command]
 pub async fn diagnostics_health(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<IndexHealth, String> {
-    store.db.with_conn(|c| {
-        let total: i64 = c
-            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        let ft_done: i64 = c
-            .query_row("SELECT COUNT(*) FROM files WHERE fulltext_state='done'", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        let ft_failed: i64 = c
-            .query_row(
-                "SELECT COUNT(*) FROM content_state WHERE status='failed'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let ocr_done: i64 = c
-            .query_row("SELECT COUNT(*) FROM files WHERE ocr_state='done'", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        let ocr_failed: i64 = c
-            .query_row("SELECT COUNT(*) FROM files WHERE ocr_state='failed'", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
+    compute_health(&store.stats_db)
+}
+
+/// 健康指标：统计专用连接执行，不阻塞界面搜索。
+fn compute_health(db: &crate::settings::DbHandle) -> Result<IndexHealth, String> {
+    db.with_conn(|c| {
+        let mut heavy = HEAVY.lock().unwrap();
+        if heavy.as_ref().map(|h| h.at.elapsed() >= HEAVY_TTL).unwrap_or(true) {
+            // 单次扫描得出全部 files 聚合，替代原来的 4 次全表扫描
+            let (total, ft_done, ocr_done, ocr_failed, last_cp) = c
+                .query_row(
+                    "SELECT COUNT(*),
+                            COALESCE(SUM(fulltext_state='done'), 0),
+                            COALESCE(SUM(ocr_state='done'), 0),
+                            COALESCE(SUM(ocr_state='failed'), 0),
+                            COALESCE(MAX(updated_ms), 0)
+                     FROM files",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .map_err(|e| e.to_string())?;
+            let ft_failed: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM content_state WHERE status='failed'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            *heavy = Some(HeavyStats {
+                at: std::time::Instant::now(),
+                total,
+                ft_done,
+                ft_failed,
+                ocr_done,
+                ocr_failed,
+                last_cp,
+            });
+        }
+        let h = heavy.as_ref().unwrap();
         let pending: i64 = c
             .query_row(
                 "SELECT COUNT(*) FROM index_outbox WHERE state='pending'",
@@ -33,20 +66,17 @@ pub async fn diagnostics_health(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let last_cp: i64 = c
-            .query_row("SELECT COALESCE(MAX(updated_ms),0) FROM files", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
         let scopes = crate::scope::list_scopes(c)?;
         Ok(IndexHealth {
-            total_files: total,
-            fulltext_done: ft_done,
-            fulltext_failed: ft_failed,
-            ocr_done,
-            ocr_failed,
+            total_files: h.total,
+            fulltext_done: h.ft_done,
+            fulltext_failed: h.ft_failed,
+            ocr_done: h.ocr_done,
+            ocr_failed: h.ocr_failed,
             outbox_pending: pending,
             db_size_bytes: db_size(c),
             scopes,
-            last_checkpoint_ms: last_cp,
+            last_checkpoint_ms: h.last_cp,
         })
     })
 }
@@ -89,8 +119,8 @@ pub async fn diagnostics_export(
     app: tauri::AppHandle,
     target: String,
 ) -> Result<String, String> {
-    let state: tauri::State<crate::AppState> = app.state();
-    let health = diagnostics_health_inner(&state)?;
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
+    let health = compute_health(&state.stats_db)?;
     let report = serde_json::json!({
         "product": "FindFlow",
         "version": env!("CARGO_PKG_VERSION"),
@@ -102,40 +132,11 @@ pub async fn diagnostics_export(
     Ok(target)
 }
 
-fn diagnostics_health_inner(
-    state: &crate::AppState,
-) -> Result<IndexHealth, String> {
-    store_health(&state.db)
-}
-
-fn store_health(db: &crate::settings::SettingsStore) -> Result<IndexHealth, String> {
-    db.with_conn(|c| {
-        let total: i64 = c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let ft_done: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE fulltext_state='done'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let ft_failed: i64 = c.query_row("SELECT COUNT(*) FROM content_state WHERE status='failed'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let ocr_done: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE ocr_state='done'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let ocr_failed: i64 = c.query_row("SELECT COUNT(*) FROM files WHERE ocr_state='failed'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let pending: i64 = c.query_row("SELECT COUNT(*) FROM index_outbox WHERE state='pending'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let last_cp: i64 = c.query_row("SELECT COALESCE(MAX(updated_ms),0) FROM files", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let scopes = crate::scope::list_scopes(c)?;
-        Ok(IndexHealth {
-            total_files: total,
-            fulltext_done: ft_done,
-            fulltext_failed: ft_failed,
-            ocr_done,
-            ocr_failed,
-            outbox_pending: pending,
-            db_size_bytes: db_size(c),
-            scopes,
-            last_checkpoint_ms: last_cp,
-        })
-    })
-}
-
 /// 数据库轻量完整性检查（§12.2）。
 #[tauri::command]
 pub async fn diagnostics_integrity(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<String, String> {
-    store.db.with_conn(|c| {
+    // 完整性检查需遍历整个库，走统计连接避免阻塞界面
+    store.stats_db.with_conn(|c| {
         c.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())
     })

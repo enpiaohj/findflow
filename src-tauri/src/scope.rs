@@ -103,7 +103,8 @@ pub fn list_scopes(c: &Connection) -> Result<Vec<crate::models::ScopeInfo>, Stri
 
 #[tauri::command]
 pub async fn scopes_list(store: tauri::State<'_, std::sync::Arc<crate::AppState>>) -> Result<Vec<crate::models::ScopeInfo>, String> {
-    store.db.with_conn(list_scopes)
+    // 各范围文件计数需扫描索引，走统计连接避免阻塞界面搜索
+    store.stats_db.with_conn(list_scopes)
 }
 
 #[tauri::command]
@@ -154,15 +155,23 @@ pub async fn scope_remove(
     delete_index: bool,
 ) -> Result<(), String> {
     store.db.with_conn(|c| -> Result<(), String> {
-        if delete_index {
-            c.execute("DELETE FROM files WHERE scope_id=?1", [scope_id]).map_err(|e| e.to_string())?;
-            c.execute("DELETE FROM scopes WHERE scope_id=?1", [scope_id]).map_err(|e| e.to_string())?;
-        } else {
-            c.execute("UPDATE scopes SET enabled=0, state='offline' WHERE scope_id=?1", [scope_id]).map_err(|e| e.to_string())?;
-        }
+        c.execute("UPDATE scopes SET enabled=0, state='offline' WHERE scope_id=?1", [scope_id]).map_err(|e| e.to_string())?;
         Ok(())
     })?;
     store.unwatch_scope(scope_id);
+    if delete_index {
+        // 百万级行的删除放到后台分块执行（同步删除索引文档），界面立即返回
+        let bg = store.bg_db.clone();
+        std::thread::Builder::new()
+            .name("scope-purge".into())
+            .spawn(move || {
+                crate::scanner::purge_scope(&bg, scope_id);
+                bg.with_conn(|c| {
+                    c.execute("DELETE FROM scopes WHERE scope_id=?1", [scope_id]).ok();
+                });
+            })
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

@@ -65,8 +65,9 @@ impl TokenStream for CnTokenStream {
     }
 }
 
-/// 索引格式版本：分词方案变更时递增，触发自动重建。
-pub const INDEX_FORMAT: &str = "2";
+/// 索引格式版本：分词方案变更或需清理旧索引时递增，触发自动重建。
+/// v3：fid 字段改为 indexed（此前删除全部失效），并清除累积的重复 / 过期文档。
+pub const INDEX_FORMAT: &str = "3";
 
 /// 注册索引所需的全部分词器（n-gram 一律小写化）。
 /// v2 瘦身：拼音 n-gram 上限 8→6，首字母 1→2，去掉单字噪声。

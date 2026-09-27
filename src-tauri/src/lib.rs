@@ -35,10 +35,12 @@ pub struct HotkeyState(pub std::sync::Mutex<String>);
 pub struct AppState {
     pub db: Arc<settings::SettingsStore>,
     pub bg_db: Arc<crate::settings::DbHandle>,
+    /// 统计专用只读连接：诊断 / 范围计数等全表聚合走这里，不占用界面连接的互斥锁
+    pub stats_db: Arc<crate::settings::DbHandle>,
+    pub data_dir: std::path::PathBuf,
     pub engine: jobs::JobEngine,
     pub index: searchindex::SearchIndex,
     pub watch: OnceLock<watcher::WatchPool>,
-    pub usage_cache: Arc<std::sync::RwLock<Option<storage_cmd::StorageUsage>>>,
 }
 
 impl AppState {
@@ -113,10 +115,13 @@ pub fn run() {
             };
             let data_dir = data_dir;
             logger::init(&data_dir);
+            // 扫描与监听跳过自身数据目录，防止范围包含数据目录时自我触发
+            util::set_app_data_dir(&data_dir);
 
             // 界面专用连接 + 后台专用连接（WAL 读写并发互不阻塞）
             let conn = db::open(&data_dir.join("findflow.db"))?;
             let conn_bg = db::open(&data_dir.join("findflow.db"))?;
+            let conn_stats = db::open(&data_dir.join("findflow.db"))?;
             let store = Arc::new(settings::SettingsStore::new(conn));
             let index = searchindex::SearchIndex::open_or_create(&data_dir.join("index"))?;
             if index.fresh {
@@ -124,6 +129,8 @@ pub fn run() {
                 let bg_enqueue = Arc::new(crate::settings::DbHandle::new(db::open(
                     &data_dir.join("findflow.db"),
                 )?));
+                // 索引全量重放：旧的待处理事件已无意义，先清空避免重复处理
+                bg_enqueue.with_conn(|c| c.execute("DELETE FROM index_outbox", []).ok());
                 std::thread::Builder::new()
                     .name("reindex-enqueue".into())
                     .spawn(move || {
@@ -169,14 +176,14 @@ pub fn run() {
             let engine = jobs::JobEngine::new(store.clone(), bg_db.clone());
             engine.recover();
 
-            let usage_cache = Arc::new(std::sync::RwLock::new(None));
             let state = Arc::new(AppState {
                 db: store.clone(),
                 bg_db,
+                stats_db: Arc::new(crate::settings::DbHandle::new(conn_stats)),
+                data_dir: data_dir.clone(),
                 engine,
                 index,
                 watch: OnceLock::new(),
-                usage_cache,
             });
 
             // outbox 消费 + 校准定时器
@@ -347,24 +354,6 @@ pub mod storage_cmd {
         pub index_bytes: u64,
     }
 
-    pub fn compute_usage(
-        _bg: &std::sync::Arc<crate::settings::DbHandle>,
-        marker: &std::path::Path,
-    ) -> crate::storage_cmd::StorageUsage {
-        let effective = std::fs::read_to_string(marker)
-            .map(|s| std::path::PathBuf::from(s.trim()))
-            .unwrap_or_else(|_| std::env::temp_dir());
-        let db_bytes = std::fs::metadata(effective.join("findflow.db"))
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let index_bytes = dir_size(&effective.join("index"));
-        crate::storage_cmd::StorageUsage {
-            data_dir: effective.to_string_lossy().to_string(),
-            db_bytes,
-            index_bytes,
-        }
-    }
-
     fn dir_size(p: &std::path::Path) -> u64 {
         let mut sum = 0u64;
         if let Ok(rd) = std::fs::read_dir(p) {
@@ -379,21 +368,26 @@ pub mod storage_cmd {
         sum
     }
 
+    /// 当前生效数据目录的占用（数据库含 WAL + 索引目录）。
     #[tauri::command]
-    pub fn storage_usage(
-        state: tauri::State<'_, crate::AppState>,
+    pub async fn storage_usage(
+        state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     ) -> Result<StorageUsage, String> {
-        // 返回后台线程维护的缓存，界面零阻塞
-        let cached = state
-            .usage_cache
-            .read()
-            .unwrap()
-            .clone();
-        Ok(cached.unwrap_or(StorageUsage {
-            data_dir: String::new(),
-            db_bytes: 0,
-            index_bytes: 0,
-        }))
+        let dir = state.data_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let file_len = |name: &str| {
+                std::fs::metadata(dir.join(name))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            };
+            StorageUsage {
+                data_dir: dir.to_string_lossy().to_string(),
+                db_bytes: file_len("findflow.db") + file_len("findflow.db-wal"),
+                index_bytes: dir_size(&dir.join("index")),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())
     }
 
     /// 更改存储位置：写入指针文件，重启后自动迁移数据库并重建索引。

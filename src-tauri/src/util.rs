@@ -1,4 +1,36 @@
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// 应用自身数据目录（数据库 / 索引 / 日志，小写归一化）。扫描与监听必须跳过，
+/// 否则范围包含数据目录时，自身写入会被监听回灌入库，形成无限循环。
+static APP_DATA_DIR: OnceLock<String> = OnceLock::new();
+
+pub fn set_app_data_dir(p: &Path) {
+    let _ = APP_DATA_DIR.set(normalize_path(p).trim_end_matches('\\').to_lowercase());
+}
+
+/// 路径是否位于应用数据目录内（含目录本身）。
+pub fn is_app_data_path(path: &str) -> bool {
+    let Some(dir) = APP_DATA_DIR.get() else {
+        return false;
+    };
+    is_under(&path.to_lowercase(), dir)
+}
+
+/// `path` 是否等于 `dir` 或位于其下（两者均为小写、无尾部分隔符）。
+fn is_under(path: &str, dir: &str) -> bool {
+    path == dir
+        || (path.len() > dir.len()
+            && path.starts_with(dir)
+            && path.as_bytes()[dir.len()] == b'\\')
+}
+
+/// 目录子树的路径区间：`path >= 'dir\' AND path < 'dir]'` 可走 path 唯一索引，
+/// 替代 `LIKE 'dir\%'` 的全表扫描（`]` 是 `\` 的下一个字符），且不受 `_`/`%` 通配干扰。
+pub fn subtree_bounds(dir: &str) -> (String, String) {
+    let base = dir.trim_end_matches('\\');
+    (format!("{base}\\"), format!("{base}]"))
+}
 
 /// 从扩展名推断文件大类，用于筛选与图标。
 pub fn kind_from(ext: &str, is_dir: bool) -> &'static str {
@@ -105,6 +137,26 @@ mod tests {
     fn pinyin_helpers() {
         assert_eq!(pinyin_abbr("项目资料"), "xmzl");
         assert_eq!(pinyin_full("AD升级"), "adshengji");
+    }
+
+    #[test]
+    fn subtree_bounds_cover_children_only() {
+        let (lo, hi) = subtree_bounds(r"D:\a");
+        let inside = |p: &str| p >= lo.as_str() && p < hi.as_str();
+        assert!(inside(r"D:\a\b.txt"));
+        assert!(inside(r"D:\a\x\y"));
+        assert!(!inside(r"D:\a"));
+        assert!(!inside(r"D:\ab\c"));
+        assert!(!inside(r"D:\a_b"));
+        assert_eq!(subtree_bounds(r"D:\").0, r"D:\");
+    }
+
+    #[test]
+    fn is_under_respects_separator_boundary() {
+        assert!(is_under(r"d:\findflowdata", r"d:\findflowdata"));
+        assert!(is_under(r"d:\findflowdata\index\x", r"d:\findflowdata"));
+        assert!(!is_under(r"d:\findflowdata2\x", r"d:\findflowdata"));
+        assert!(!is_under(r"d:\find", r"d:\findflowdata"));
     }
 
     #[test]

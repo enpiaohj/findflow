@@ -6,70 +6,90 @@ use rusqlite::params;
 
 use crate::settings::DbHandle;
 
-/// 单次消费循环：处理一批事件后返回。由外层 catch_unwind 守护。
+/// 每批读取的事件数。
+const BATCH: usize = 2000;
+/// 未提交文档达到该数量立即提交（批量重放期间减少提交次数）。
+const COMMIT_DOCS: usize = 20_000;
+/// 有未提交改动时的最长提交间隔。
+const COMMIT_MAX_INTERVAL: Duration = Duration::from_secs(5);
+/// 队列已空时的最短提交间隔（零散变更尽快可搜，又不致每秒多次提交）。
+const COMMIT_IDLE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 单次消费循环：持续处理事件，直到停止或异常。由外层 catch_unwind 守护。
 fn consume_tick(state: &Arc<crate::AppState>, bg: &DbHandleArc, stop: &AtomicBool) {
-    let mut last_commit = Instant::now() - Duration::from_secs(10);
+    let mut last_commit = Instant::now();
+    let mut last_checkpoint = Instant::now();
+    let mut dirty: usize = 0;
     loop {
         if stop.load(Ordering::SeqCst) {
+            if dirty > 0 {
+                let _ = state.index.commit();
+            }
             return;
         }
-        let batch = bg.with_conn(|c| -> Result<Vec<(i64, i64, String)>, String> {
+        let batch = bg.with_conn(|c| -> Result<Vec<(i64, i64)>, String> {
             let mut stmt = c
-                .prepare(
-                    "SELECT event_id, file_id, operation FROM index_outbox
-                     WHERE state='pending' ORDER BY event_id LIMIT 400",
+                .prepare_cached(
+                    "SELECT event_id, file_id FROM index_outbox
+                     WHERE state='pending' ORDER BY event_id LIMIT ?1",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .query_map([BATCH as i64], |r| Ok((r.get(0)?, r.get(1)?)))
                 .map_err(|e| e.to_string())?;
-            let all: Vec<(i64, i64, String)> = rows.filter_map(|x| x.ok()).collect();
-            Ok(all)
+            Ok(rows.filter_map(|x| x.ok()).collect())
         });
         match batch {
             Ok(events) if events.is_empty() => {
+                if dirty > 0 && last_commit.elapsed() >= COMMIT_IDLE_INTERVAL {
+                    commit_and_reload(state);
+                    dirty = 0;
+                    last_commit = Instant::now();
+                }
                 // 空闲期定期截断 WAL，防止无限膨胀
-                if last_commit.elapsed() >= Duration::from_secs(300) {
+                if last_checkpoint.elapsed() >= Duration::from_secs(300) {
                     bg.with_conn(|c| {
                         c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").ok();
                     });
-                    last_commit = Instant::now();
+                    last_checkpoint = Instant::now();
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
             Ok(events) => {
-                let mut done_ids: Vec<i64> = Vec::with_capacity(events.len());
-                for (event_id, fid, op) in &events {
-                    apply_event(bg, state, *fid, op);
-                    done_ids.push(*event_id);
-                }
-                // 单条语句批量删除已应用事件，减少持锁次数
-                if !done_ids.is_empty() {
-                    let list = done_ids
-                        .iter()
-                        .map(|i| i.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    bg.with_conn(|c| {
-                        c.execute(
-                            &format!("DELETE FROM index_outbox WHERE event_id IN ({})", list),
-                            [],
-                        )
-                        .ok();
-                    });
-                }
-                // 提交批量化：满批立即提交；不满批时隔 2 秒再提交
-                if events.len() >= 400 || last_commit.elapsed() >= Duration::from_secs(2) {
-                    let _ = state.index.commit();
-                    state.index.reload();
+                let min_id = events.first().map(|e| e.0).unwrap_or(0);
+                let max_id = events.last().map(|e| e.0).unwrap_or(0);
+                // 同一文件的多次事件只需处理一次：最终以 files 表当前行为准
+                let mut fids: Vec<i64> = events.iter().map(|e| e.1).collect();
+                fids.sort_unstable();
+                fids.dedup();
+                dirty += apply_batch(bg, state, &fids);
+                // 本批是按 event_id 升序取的最小 N 条，区间内不会有其他待处理事件；
+                // 新事件的 rowid 必然大于当前最大值，区间删除安全且只需一次索引范围扫描
+                bg.with_conn(|c| {
+                    c.execute(
+                        "DELETE FROM index_outbox WHERE event_id BETWEEN ?1 AND ?2",
+                        params![min_id, max_id],
+                    )
+                    .ok();
+                });
+                if dirty >= COMMIT_DOCS || last_commit.elapsed() >= COMMIT_MAX_INTERVAL {
+                    commit_and_reload(state);
+                    dirty = 0;
                     last_commit = Instant::now();
                 }
-                // 批间让出，避免饿死界面命令
+                // 批间让出，避免饿死其他后台写入
                 std::thread::sleep(Duration::from_millis(3));
             }
             Err(_) => std::thread::sleep(Duration::from_millis(1000)),
         }
     }
+}
+
+fn commit_and_reload(state: &crate::AppState) {
+    if let Err(e) = state.index.commit() {
+        tracing::warn!("索引提交失败: {e}");
+    }
+    state.index.reload();
 }
 
 type DbHandleArc = Arc<DbHandle>;
@@ -114,60 +134,51 @@ pub fn spawn_consumer(state: Arc<crate::AppState>, bg: DbHandleArc, stop: Arc<At
         .ok();
 }
 
-fn apply_event(db: &crate::settings::DbHandle, state: &crate::AppState, fid: i64, op: &str) {
-    if op == "delete" {
-        state.index.delete(fid as u64);
-        return;
+/// 按文件批量同步到索引：行存在则重写文档（先删后加，避免重复文档），行已删除则删文档。
+/// 返回写入的改动数。
+fn apply_batch(db: &DbHandle, state: &crate::AppState, fids: &[i64]) -> usize {
+    let mut rows: std::collections::HashMap<i64, (String, Option<String>, Option<String>)> =
+        std::collections::HashMap::with_capacity(fids.len());
+    for chunk in fids.chunks(500) {
+        let list = chunk
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        db.with_conn(|c| {
+            let sql = format!(
+                "SELECT f.file_id, f.name,
+                        CASE WHEN f.fulltext_state='done' THEN ct.content_text END,
+                        CASE WHEN f.ocr_state='done' THEN ot.ocr_text END
+                 FROM files f
+                 LEFT JOIN content_text ct ON ct.file_id = f.file_id
+                 LEFT JOIN ocr_text ot ON ot.file_id = f.file_id
+                 WHERE f.file_id IN ({list})"
+            );
+            if let Ok(mut stmt) = c.prepare(&sql) {
+                if let Ok(it) = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                }) {
+                    for (fid, name, content, ocr) in it.flatten() {
+                        rows.insert(fid, (name, content, ocr));
+                    }
+                }
+            }
+        });
     }
-    // upsert：重读行，内容/OCR 已就绪则一并写入。
-    let row: Option<(String, String, String, String)> = db.with_conn(|c| {
-        c.query_row(
-            "SELECT name, COALESCE(f.fulltext_state,'none'), COALESCE(cs.content_hash,''),
-                    COALESCE(f.ocr_state,'none')
-             FROM files f
-             LEFT JOIN content_state cs ON cs.file_id = f.file_id
-             WHERE f.file_id=?1",
-            params![fid],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            },
-        )
-        .ok()
-    });
-    let Some((name, ft_state, _hash, ocr_state)) = row else {
-        state.index.delete(fid as u64);
-        return;
-    };
-    let _content = if ft_state == "done" {
-        db.with_conn(|c| {
-            c.query_row(
-                "SELECT content_text FROM content_text WHERE file_id=?1",
-                params![fid],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
-        })
-    } else {
-        None
-    };
-    let content = _content.as_deref();
-    let ocr = if ocr_state == "done" {
-        db.with_conn(|c| {
-            c.query_row(
-                "SELECT ocr_text FROM ocr_text WHERE file_id=?1",
-                params![fid],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
-        })
-    } else {
-        None
-    };
-    let doc = state.index.build_doc(fid as u64, &name, content, ocr.as_deref());
-    let _ = state.index.add(doc);
+    for fid in fids {
+        state.index.delete(*fid as u64);
+        if let Some((name, content, ocr)) = rows.get(fid) {
+            let doc = state
+                .index
+                .build_doc(*fid as u64, name, content.as_deref(), ocr.as_deref());
+            let _ = state.index.add(doc);
+        }
+    }
+    fids.len()
 }

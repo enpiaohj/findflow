@@ -101,7 +101,7 @@ pub async fn batch_rename_execute(
     app: tauri::AppHandle,
     items: Vec<PlanItem>,
 ) -> Result<serde_json::Value, String> {
-    let state: tauri::State<crate::AppState> = app.state();
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     let op_id = crate::util::now_ms();
     let mut ok = 0usize;
     let mut failed = 0usize;
@@ -162,7 +162,7 @@ pub async fn batch_rename_execute(
 /// 一次性撤销批量重命名（撤销前由前端再次确认，FR10）。
 #[tauri::command]
 pub async fn batch_rename_undo(app: tauri::AppHandle, operation_id: i64) -> Result<serde_json::Value, String> {
-    let state: tauri::State<crate::AppState> = app.state();
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     let rows: Vec<(i64, String, String)> = state.db.with_conn(|c| {
         let mut stmt = c
             .prepare("SELECT file_id, old_path, new_path FROM rename_undo WHERE operation_id=?1")

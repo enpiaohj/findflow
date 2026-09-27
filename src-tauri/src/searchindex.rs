@@ -41,7 +41,11 @@ impl SearchIndex {
     pub fn open_or_create(dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let mut sb = Schema::builder();
-        let fid = sb.add_u64_field("fid", NumericOptions::default().set_stored().set_fast());
+        // fid 必须 indexed：delete_term 依赖倒排索引定位文档，否则删除全部静默失效
+        let fid = sb.add_u64_field(
+            "fid",
+            NumericOptions::default().set_stored().set_fast().set_indexed(),
+        );
         let name = sb.add_text_field("name", text_opts(true, "cn"));
         let name_bi = sb.add_text_field("name_bi", text_opts(false, "bi"));
         let name_tri = sb.add_text_field("name_tri", text_opts(false, "tri"));
@@ -332,5 +336,27 @@ impl SearchIndex {
         } else {
             Some(fragment.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_then_add_keeps_single_doc_per_fid() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+        idx.add(idx.build_doc(7, "报告初稿.docx", None, None)).unwrap();
+        idx.commit().unwrap();
+        // 与 outbox 消费一致：同一次提交内先删后加
+        idx.delete(7);
+        idx.add(idx.build_doc(7, "报告终稿.docx", None, None)).unwrap();
+        idx.commit().unwrap();
+        idx.reload();
+        let q = idx.build_query("报告", None, false);
+        let hits = idx.candidate_docs(q.as_ref(), 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, 7);
     }
 }

@@ -94,7 +94,24 @@ impl JobEngine {
                     );
                 }
                 ctx.set_state("running");
-                body(ctx);
+                let db = ctx.db.clone();
+                // panic 隔离：否则任务永远停在 running，同类任务去重会导致再也无法启动
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(ctx)));
+                if result.is_err() {
+                    tracing::error!("后台任务 {job_id} 异常退出");
+                    db.with_conn(|c| {
+                        c.execute(
+                            "UPDATE jobs SET state='failed', result_json=?2, updated_at=?3
+                             WHERE job_id=?1 AND state IN ('waiting','running','paused')",
+                            rusqlite::params![
+                                job_id,
+                                serde_json::json!({"error": "任务异常退出"}).to_string(),
+                                util::now_rfc3339()
+                            ],
+                        )
+                        .ok();
+                    });
+                }
                 handles.lock().unwrap().remove(&job_id);
             })
             .map_err(|e| e.to_string())?;

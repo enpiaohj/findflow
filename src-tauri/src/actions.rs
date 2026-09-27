@@ -393,7 +393,7 @@ pub async fn action_rename(
     }
     std::fs::rename(old, &new_path).map_err(|e| format!("重命名失败：{e}"))?;
     let new_s = util::normalize_path(&new_path);
-    let state: tauri::State<crate::AppState> = app.state();
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     state.db.with_conn(|c| {
         c.execute(
             "UPDATE files SET path=?2, name=?3, updated_ms=?4 WHERE path=?1",
@@ -430,7 +430,7 @@ fn shell_invoke(path: &str, verb: &str) -> Result<(), String> {
 }
 
 fn record_recent(app: &tauri::AppHandle, path: &str, action: &str) {
-    let state: tauri::State<crate::AppState> = app.state();
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     state
         .db
         .with_conn(|c| {
@@ -453,7 +453,7 @@ fn record_recent(app: &tauri::AppHandle, path: &str, action: &str) {
 }
 
 fn mark_deleted(app: &tauri::AppHandle, path: &str) {
-    let state: tauri::State<crate::AppState> = app.state();
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
     state
         .db
         .with_conn(|c| {

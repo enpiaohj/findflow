@@ -9,10 +9,12 @@ pub fn init(data_dir: &Path) {
     let _ = std::fs::create_dir_all(&dir);
     let _ = LOG_DIR.set(dir.clone());
     let appender = tracing_appender::rolling::daily(&dir, "findflow.log");
+    // tantivy 每次提交/合并都输出多行 INFO，会淹没应用日志并撑大日志文件，只保留其警告
+    let filter = tracing_subscriber::EnvFilter::new("info,tantivy=warn");
     tracing_subscriber::fmt()
         .with_writer(appender)
         .with_ansi(false)
-        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(filter)
         .init();
     // 后台清理：诊断日志默认保留 14 天（设计文档 §8.3）。
     std::thread::spawn(|| {
