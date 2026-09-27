@@ -23,6 +23,13 @@ import {
   diagnosticsHealth,
   type ScopeInfo,
 } from "../../api";
+import {
+  DEFAULT_START_VIEW,
+  LEGACY_START_LOCATION_KEY,
+  START_VIEW_KEY,
+  resolveStartView,
+  type StartViewSetting,
+} from "../../startView";
 
 interface TrialScanResultLike {
   path: string;
@@ -56,32 +63,76 @@ export default function IndexPage({ notice }: PageCtx) {
     exts: string;
     includeHidden: boolean;
   } | null>(null);
-  // 启动视图："all" = 所有位置；"scope" = 指定索引位置（配 startScope）
-  const [startMode, setStartMode] = useState<"all" | "scope">("all");
-  const [startScope, setStartScope] = useState<number | null>(null);
+  const [startView, setStartViewState] = useState<StartViewSetting>({
+    ...DEFAULT_START_VIEW,
+  });
+  const [startViewLoaded, setStartViewLoaded] = useState(false);
 
   const reload = () => {
     scopesList().then(setScopes).catch(() => undefined);
     diagnosticsHealth().then(setHealth).catch(() => undefined);
     storageUsage().then(setUsage).catch(() => undefined);
   };
-  useEffect(reload, []);
   useEffect(() => {
-    getSetting<string | number>("ui.startLocation")
-      .then((v) => {
-        if (typeof v === "number" && v > 0) {
-          setStartMode("scope");
-          setStartScope(v);
+    let cancelled = false;
+
+    Promise.all([
+      scopesList(),
+      getSetting<unknown>(START_VIEW_KEY),
+      getSetting<unknown>(LEGACY_START_LOCATION_KEY),
+    ])
+      .then(([nextScopes, currentValue, legacyValue]) => {
+        if (cancelled) return;
+        const resolved = resolveStartView(currentValue, legacyValue, nextScopes);
+        setScopes(nextScopes);
+        setStartViewState(resolved.setting);
+        setStartViewLoaded(true);
+        if (resolved.needsPersist) {
+          setSetting(START_VIEW_KEY, resolved.setting).catch((error) =>
+            notice("启动列表设置迁移失败：" + String(error)),
+          );
         }
       })
-      .catch(() => undefined);
-  }, []);
+      .catch((error) => {
+        if (!cancelled) notice("读取启动列表设置失败：" + String(error));
+      });
 
-  const saveStartLocation = (mode: "all" | "scope", scopeId?: number | null) => {
-    setSetting("ui.startLocation", mode === "scope" && scopeId ? scopeId : "all").catch((e) =>
-      notice(String(e))
+    diagnosticsHealth()
+      .then((nextHealth) => {
+        if (!cancelled) setHealth(nextHealth);
+      })
+      .catch(() => undefined);
+    storageUsage()
+      .then((nextUsage) => {
+        if (!cancelled) setUsage(nextUsage);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notice]);
+  useEffect(() => {
+    if (!startViewLoaded) return;
+    const resolved = resolveStartView(startView, null, scopes);
+    if (!resolved.needsPersist) return;
+
+    setStartViewState(resolved.setting);
+    setSetting(START_VIEW_KEY, resolved.setting).catch((error) =>
+      notice("默认索引位置更新失败：" + String(error)),
     );
+  }, [notice, scopes, startView, startViewLoaded]);
+
+  const saveStartView = async (next: StartViewSetting) => {
+    try {
+      await setSetting(START_VIEW_KEY, next);
+      setStartViewState(next);
+    } catch (error) {
+      notice("保存启动列表设置失败：" + String(error));
+    }
   };
+
+  const enabledScopes = scopes.filter((scope) => scope.enabled);
   // 范围状态/数量轮询刷新，扫描完成后列表自动更新
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -216,63 +267,66 @@ export default function IndexPage({ notice }: PageCtx) {
 
       <section className="card">
         <div className="card-head">
-          <h3>启动视图</h3>
+          <h3>启动列表</h3>
         </div>
         <div className="toggle-row">
           <div>
             <b>打开 FindFlow 时显示</b>
-            <p className="muted">启动后列表默认显示的位置（关键词搜索始终搜全部位置）；搜索窗内可随时切换</p>
+            <p className="muted">仅控制搜索框为空时的列表；输入关键词后始终搜索全部索引位置</p>
           </div>
           <div className="segmented">
             <button
-              className={startMode === "all" ? "active" : ""}
-              onClick={() => {
-                setStartMode("all");
-                saveStartLocation("all");
-              }}
+              className={startView.mode === "index" ? "active" : ""}
+              onClick={() =>
+                void saveStartView(
+                  resolveStartView({ mode: "index", scopeId: startView.scopeId }, null, scopes)
+                    .setting,
+                )
+              }
             >
-              所有位置
+              索引内容
             </button>
             <button
-              className={startMode === "scope" ? "active" : ""}
-              onClick={() => {
-                const first = startScope ?? scopes.find((s) => s.enabled)?.scopeId ?? null;
-                setStartMode("scope");
-                setStartScope(first);
-                saveStartLocation("scope", first);
-              }}
+              className={startView.mode === "large" ? "active" : ""}
+              onClick={() => void saveStartView({ mode: "large", scopeId: null })}
             >
-              索引位置
+              大文件
             </button>
           </div>
         </div>
-        {startMode === "scope" ? (
+        {startView.mode === "index" ? (
           <div className="toggle-row">
             <div>
               <b>默认索引位置</b>
-              <p className="muted">选择启动时显示哪个索引位置；该位置被移除后自动回退为所有位置</p>
+              <p className="muted">空搜索时列出该位置下的全部索引内容，并按名称排序</p>
             </div>
             <select
-              value={startScope ?? ""}
-              onChange={(e) => {
-                const id = Number(e.target.value);
-                setStartScope(id);
-                saveStartLocation("scope", id);
-              }}
+              value={startView.scopeId ?? ""}
+              onChange={(event) =>
+                void saveStartView({
+                  mode: "index",
+                  scopeId: Number(event.target.value),
+                })
+              }
+              disabled={enabledScopes.length === 0}
             >
-              {scopes.filter((s) => s.enabled).length === 0 ? (
-                <option value="">暂无启用的索引位置</option>
-              ) : null}
-              {scopes
-                .filter((s) => s.enabled)
-                .map((s) => (
-                  <option key={s.scopeId} value={s.scopeId}>
-                    {s.path}
-                  </option>
-                ))}
+              {enabledScopes.length === 0 ? <option value="">暂无启用的索引位置</option> : null}
+              {enabledScopes.map((scope) => (
+                <option key={scope.scopeId} value={scope.scopeId}>
+                  {scope.path}
+                </option>
+              ))}
             </select>
           </div>
-        ) : null}
+        ) : (
+          <div className="toggle-row">
+            <div>
+              <b>大文件范围</b>
+              <p className="muted">跨全部索引位置，并按文件大小降序显示</p>
+            </div>
+            <span className="toggle-on">全部位置</span>
+          </div>
+        )}
       </section>
 
       {excludeEdit ? (
