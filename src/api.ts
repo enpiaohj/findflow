@@ -83,8 +83,9 @@ export const setSetting = (key: string, value: unknown): Promise<void> =>
 export const search = (
   query: string,
   sort?: string,
-  limit?: number
-): Promise<SearchResponse> => invoke("cmd_search", { query, sort, limit });
+  limit?: number,
+  scopeId?: number
+): Promise<SearchResponse> => invoke("cmd_search", { query, sort, limit, scopeId });
 
 export const nlParse = (text: string): Promise<{ ast: unknown; confidence: number; explain: string[] }> =>
   invoke("cmd_nl_parse", { text });

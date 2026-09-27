@@ -4,6 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { PageCtx } from "../ManageBody";
 import { useConfirm } from "../../components/ConfirmDialog";
 import {
+  getSetting,
+  setSetting,
   scopesList,
   scopeAdd,
   scopeRemove,
@@ -54,6 +56,9 @@ export default function IndexPage({ notice }: PageCtx) {
     exts: string;
     includeHidden: boolean;
   } | null>(null);
+  // 启动视图："all" = 所有位置；"scope" = 指定索引位置（配 startScope）
+  const [startMode, setStartMode] = useState<"all" | "scope">("all");
+  const [startScope, setStartScope] = useState<number | null>(null);
 
   const reload = () => {
     scopesList().then(setScopes).catch(() => undefined);
@@ -61,6 +66,22 @@ export default function IndexPage({ notice }: PageCtx) {
     storageUsage().then(setUsage).catch(() => undefined);
   };
   useEffect(reload, []);
+  useEffect(() => {
+    getSetting<string | number>("ui.startLocation")
+      .then((v) => {
+        if (typeof v === "number" && v > 0) {
+          setStartMode("scope");
+          setStartScope(v);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const saveStartLocation = (mode: "all" | "scope", scopeId?: number | null) => {
+    setSetting("ui.startLocation", mode === "scope" && scopeId ? scopeId : "all").catch((e) =>
+      notice(String(e))
+    );
+  };
   // 范围状态/数量轮询刷新，扫描完成后列表自动更新
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -191,6 +212,67 @@ export default function IndexPage({ notice }: PageCtx) {
             </div>
           </div>
         ))}
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>启动视图</h3>
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>打开 FindFlow 时显示</b>
+            <p className="muted">启动后列表默认显示的位置（关键词搜索始终搜全部位置）；搜索窗内可随时切换</p>
+          </div>
+          <div className="segmented">
+            <button
+              className={startMode === "all" ? "active" : ""}
+              onClick={() => {
+                setStartMode("all");
+                saveStartLocation("all");
+              }}
+            >
+              所有位置
+            </button>
+            <button
+              className={startMode === "scope" ? "active" : ""}
+              onClick={() => {
+                const first = startScope ?? scopes.find((s) => s.enabled)?.scopeId ?? null;
+                setStartMode("scope");
+                setStartScope(first);
+                saveStartLocation("scope", first);
+              }}
+            >
+              索引位置
+            </button>
+          </div>
+        </div>
+        {startMode === "scope" ? (
+          <div className="toggle-row">
+            <div>
+              <b>默认索引位置</b>
+              <p className="muted">选择启动时显示哪个索引位置；该位置被移除后自动回退为所有位置</p>
+            </div>
+            <select
+              value={startScope ?? ""}
+              onChange={(e) => {
+                const id = Number(e.target.value);
+                setStartScope(id);
+                saveStartLocation("scope", id);
+              }}
+            >
+              {scopes.filter((s) => s.enabled).length === 0 ? (
+                <option value="">暂无启用的索引位置</option>
+              ) : null}
+              {scopes
+                .filter((s) => s.enabled)
+                .map((s) => (
+                  <option key={s.scopeId} value={s.scopeId}>
+                    {s.path}
+                  </option>
+                ))}
+            </select>
+          </div>
+        ) : null}
       </section>
 
       {excludeEdit ? (

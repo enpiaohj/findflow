@@ -181,7 +181,7 @@ fn run_query_bench(
     let mut samples: Vec<u128> = Vec::new();
     for _ in 0..rounds {
         let t = Instant::now();
-        let outcome = findflow_lib::search::run(store, index, &ast, 20).expect("查询失败");
+        let outcome = findflow_lib::search::run(store, index, &ast, 20, None).expect("查询失败");
         samples.push(t.elapsed().as_millis());
         if samples.len() == 1 {
             println!("结果 {} 项（总数 {}）", outcome.items.len(), outcome.total);

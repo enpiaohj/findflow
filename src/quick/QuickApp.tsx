@@ -19,13 +19,17 @@ import {
   actionCopyPath,
   actionCopyFiles,
   scanStatus,
+  scopesList,
   type FileRow,
+  type ScopeInfo,
 } from "../api";
 import type { Density } from "../types";
 
 const DENSITY_KEY = "ui.density";
 // 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
 const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
+// 启动时显示的位置："all" 或索引范围 scopeId（设置「启动视图」控制，搜索窗内可临时切换）
+const START_LOCATION_KEY = "ui.startLocation";
 
 const FILTER_QUERY: Record<FilterId, string> = {
   all: "",
@@ -60,6 +64,9 @@ export default function QuickApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [clearOnHide, setClearOnHide] = useState(false);
+  // 位置筛选：0 = 所有位置，>0 = 指定索引范围 scopeId
+  const [scopes, setScopes] = useState<ScopeInfo[]>([]);
+  const [locationId, setLocationId] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -85,7 +92,17 @@ export default function QuickApp() {
     getSetting<boolean>(CLEAR_ON_HIDE_KEY)
       .then((v) => setClearOnHide(!!v))
       .catch(() => undefined);
+    getSetting<string | number>(START_LOCATION_KEY)
+      .then((v) => {
+        if (typeof v === "number" && v > 0) setLocationId(v);
+      })
+      .catch(() => undefined);
   }, []);
+
+  // 索引位置列表：启动与关闭设置视图后刷新
+  useEffect(() => {
+    if (!settingsOpen) scopesList().then(setScopes).catch(() => undefined);
+  }, [settingsOpen]);
 
   // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
   const settingsOpenRef = useRef(false);
@@ -113,6 +130,11 @@ export default function QuickApp() {
     return () => void unlistenP.then((f) => f());
   }, []);
 
+  // 启动位置已被移除 / 停用时回退为所有位置
+  const activeLocation = scopes.some((s) => s.scopeId === locationId && s.enabled)
+    ? locationId
+    : 0;
+
   const changeDensity = useCallback((next: Density) => {
     setDensity(next);
     setSetting(DENSITY_KEY, next).catch(() => undefined);
@@ -120,8 +142,10 @@ export default function QuickApp() {
 
   const runSearch = useCallback(() => {
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
+    // 关键词搜索始终覆盖全部索引位置；位置仅决定空查询时浏览列表显示的范围
+    const browseScope = query.trim() ? 0 : activeLocation;
     const gen = ++searchGen.current;
-    apiSearch(q, sort === "relevance" ? undefined : sort, 200)
+    apiSearch(q, sort === "relevance" ? undefined : sort, 200, browseScope || undefined)
       .then((r) => {
         if (gen !== searchGen.current) return;
         setItems(r.items);
@@ -132,7 +156,7 @@ export default function QuickApp() {
         if (gen !== searchGen.current) return;
         notice("搜索失败：" + String(e));
       });
-  }, [query, filter, sort, notice]);
+  }, [query, filter, sort, activeLocation, notice]);
 
   // 搜索：50ms 防抖（设计文档 §3.2）
   useEffect(() => {
@@ -142,7 +166,7 @@ export default function QuickApp() {
 
   useEffect(() => {
     setSelectedIndex(0);
-  }, [query, filter, sort]);
+  }, [query, filter, sort, activeLocation]);
 
   // 索引进度仅在设置内查看；扫描结束后刷新索引总数
   const wasScanning = useRef(false);
@@ -324,6 +348,10 @@ export default function QuickApp() {
             onDensityChange={changeDensity}
             count={items.length}
             limited={items.length >= 200}
+            scopes={scopes}
+            locationId={activeLocation}
+            onLocationChange={setLocationId}
+            locationDisabled={!!query.trim()}
           />
           <div className="result-status">
             {`索引 ${total.toLocaleString()} 条 · 用时 ${elapsed} ms`}

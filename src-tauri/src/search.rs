@@ -13,11 +13,13 @@ pub struct SearchOutcome {
 }
 
 /// 执行一次搜索：Tantivy 提供候选 → SQLite 过滤补全 → 综合排序（设计文档 §9）。
+/// `scope_id` 非 None 且 > 0 时仅在该索引范围内检索（搜索窗「位置」筛选）。
 pub fn run(
     store: &crate::settings::SettingsStore,
     index: &crate::searchindex::SearchIndex,
     ast: &QueryAst,
     limit: usize,
+    scope_id: Option<i64>,
 ) -> Result<SearchOutcome, String> {
     let start = Instant::now();
     let mut candidate_scores: Option<Vec<(i64, f64)>> = None;
@@ -74,6 +76,13 @@ pub fn run(
                 "f.file_id IN (SELECT fid FROM temp.cands)"
             ));
             let _ = scored.len();
+        }
+        if let Some(sid) = scope_id {
+            if sid > 0 {
+                // 走 idx_files_scope 索引
+                where_parts.push("f.scope_id = ?".into());
+                bind.push(Box::new(sid));
+            }
         }
         if !ast.exts.is_empty() {
             let qs = vec!["?"; ast.exts.len()].join(",");
@@ -249,7 +258,7 @@ pub fn run(
         items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    let total = cached_total(store)?;
+    let total = cached_total(store, scope_id)?;
     let _ = &index;
     Ok(SearchOutcome {
         items,
@@ -259,20 +268,28 @@ pub fn run(
 }
 
 /// 索引总数（UI 显示“共 N 项”）：百万级 COUNT(*) 需数十毫秒，每次按键都算会拖慢输入，
-/// 缓存 10 秒即可满足显示需要。
-fn cached_total(store: &crate::settings::SettingsStore) -> Result<i64, String> {
-    static TOTAL: std::sync::Mutex<Option<(Instant, i64)>> = std::sync::Mutex::new(None);
+/// 缓存 10 秒即可满足显示需要。单槽缓存键含位置：切换位置或超时才重算。
+fn cached_total(
+    store: &crate::settings::SettingsStore,
+    scope_id: Option<i64>,
+) -> Result<i64, String> {
+    static TOTAL: std::sync::Mutex<Option<(Option<i64>, Instant, i64)>> =
+        std::sync::Mutex::new(None);
     let mut cache = TOTAL.lock().unwrap();
-    if let Some((at, n)) = *cache {
-        if at.elapsed() < std::time::Duration::from_secs(10) {
+    if let Some((key, at, n)) = *cache {
+        if key == scope_id && at.elapsed() < std::time::Duration::from_secs(10) {
             return Ok(n);
         }
     }
     let n: i64 = store.with_conn(|c| {
-        c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
-            .map_err(|e| e.to_string())
+        if let Some(sid) = scope_id {
+            c.query_row("SELECT COUNT(*) FROM files WHERE scope_id = ?1", [sid], |r| r.get(0))
+        } else {
+            c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+        }
+        .map_err(|e| e.to_string())
     })?;
-    *cache = Some((Instant::now(), n));
+    *cache = Some((scope_id, Instant::now(), n));
     Ok(n)
 }
 
@@ -310,6 +327,7 @@ pub async fn cmd_search(
     query: String,
     sort: Option<String>,
     limit: Option<usize>,
+    scope_id: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     let mut ast = if query.trim().is_empty() {
         crate::models::QueryAst::default()
@@ -324,7 +342,7 @@ pub async fn cmd_search(
             _ => crate::models::SortMode::Relevance,
         };
     }
-    let outcome = run(&store.db, &store.index, &ast, limit.unwrap_or(200))?;
+    let outcome = run(&store.db, &store.index, &ast, limit.unwrap_or(200), scope_id)?;
     Ok(serde_json::json!({
         "items": outcome.items,
         "total": outcome.total,
@@ -332,4 +350,46 @@ pub async fn cmd_search(
         "ast": ast,
         "explain": ast.explain(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 位置筛选：scope_id 限定结果与总数；None 返回全部。
+    #[test]
+    fn scope_filter_limits_results_and_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
+                [],
+            )
+            .unwrap();
+            for (sid, name) in [(1, "报告a.txt"), (2, "报告b.txt")] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind) VALUES (?1, ?2, ?3, 'doc')",
+                    rusqlite::params![sid, name, format!("D:/x/{name}")],
+                )
+                .unwrap();
+            }
+        });
+
+        let ast = QueryAst::default();
+        let all = run(&store, &index, &ast, 10, None).unwrap();
+        assert_eq!(all.items.len(), 2);
+        assert_eq!(all.total, 2);
+
+        let scoped = run(&store, &index, &ast, 10, Some(1)).unwrap();
+        assert_eq!(scoped.items.len(), 1);
+        assert_eq!(scoped.items[0].path, "D:/x/报告a.txt");
+        assert_eq!(scoped.total, 1);
+
+        // 不存在的位置：结果为空
+        let none = run(&store, &index, &ast, 10, Some(99)).unwrap();
+        assert_eq!(none.items.len(), 0);
+        assert_eq!(none.total, 0);
+    }
 }
