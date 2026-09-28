@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
 import type { PageCtx } from "../ManageBody";
 import {
   jobsList,
@@ -8,10 +7,6 @@ import {
   jobCancel,
   jobRetryFailed,
   diagnosticsHealth,
-  diagnosticsFailures,
-  diagnosticsExport,
-  diagnosticsIntegrity,
-  logDirGet,
   formatBytes,
   type JobInfo,
   type IndexHealth,
@@ -66,19 +61,14 @@ function formatJobTime(iso: string): string {
 export default function TasksPage({ notice }: PageCtx) {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [health, setHealth] = useState<IndexHealth | null>(null);
-  const [failures, setFailures] = useState<{ code: string | null; count: number }[]>([]);
-  const [integrity, setIntegrity] = useState<string | null>(null);
-  const [logDir, setLogDir] = useState<string | null>(null);
 
   const reload = () => {
     jobsList(50).then(setJobs).catch(() => undefined);
     diagnosticsHealth().then(setHealth).catch(() => undefined);
-    diagnosticsFailures().then(setFailures).catch(() => undefined);
   };
 
   useEffect(() => {
     reload();
-    logDirGet().then(setLogDir).catch(() => undefined);
     const t = window.setInterval(reload, 3000);
     return () => window.clearInterval(t);
   }, []);
@@ -94,8 +84,8 @@ export default function TasksPage({ notice }: PageCtx) {
 
   return (
     <div className="page">
-      <h2>任务与诊断</h2>
-      <p className="page-desc">查看后台任务进度与索引健康状况，定位失败原因。</p>
+      <h2>任务</h2>
+      <p className="page-desc">查看后台任务进度与索引健康状况。</p>
       <div className="health-banner">
         <span className="health-ok">✓</span>
         <span>系统状态</span>
@@ -188,60 +178,6 @@ export default function TasksPage({ notice }: PageCtx) {
             ))}
           </tbody>
         </table>
-      </section>
-
-      <section className="card">
-        <h3>索引诊断</h3>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>问题类型</th>
-              <th className="col-right">数量</th>
-            </tr>
-          </thead>
-          <tbody>
-            {failures.length === 0 ? (
-              <tr>
-                <td className="muted">无</td>
-                <td className="col-right muted">0</td>
-              </tr>
-            ) : null}
-            {failures.map((f) => (
-              <tr key={f.code ?? "unknown"}>
-                <td>{f.code ?? "未知"}</td>
-                <td className="col-right">{f.count}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="trial-actions">
-          <button
-            onClick={async () => {
-              const target = await save({
-                defaultPath: "findflow-diagnostics.json",
-                filters: [{ name: "JSON", extensions: ["json"] }],
-              });
-              if (target) {
-                diagnosticsExport(target)
-                  .then((t) => notice(`诊断包已导出：${t}`))
-                  .catch((e) => notice(String(e)));
-              }
-            }}
-          >
-            导出诊断包
-          </button>
-          <button
-            onClick={() =>
-              diagnosticsIntegrity()
-                .then(setIntegrity)
-                .catch((e) => notice(String(e)))
-            }
-          >
-            数据库完整性检查
-          </button>
-          {integrity ? <span className="muted">quick_check：{integrity}</span> : null}
-        </div>
-        {logDir ? <p className="muted">日志目录（保留 14 天）：{logDir}</p> : null}
       </section>
     </div>
   );

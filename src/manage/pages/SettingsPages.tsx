@@ -8,46 +8,22 @@ import {
   llmSetKey,
   llmClearKey,
   hotkeyApply,
-  autostartIsEnabled,
-  autostartEnable,
-  autostartDisable,
 } from "../../api";
 import { getThemePref, setThemePref, type ThemePref } from "../../theme";
 
-export function AppearancePage({ notice }: PageCtx) {
+/** 外观：主题与显示密度。 */
+export function AppearanceSettingsPage({ notice: _notice }: PageCtx) {
   const [density, setDensity] = useState("compact");
-  const [hotkey, setHotkey] = useState("Alt+Q");
-  const [hotkeyCommitted, setHotkeyCommitted] = useState("");
-  const [blurHide, setBlurHide] = useState(true);
-  const [clearOnHide, setClearOnHide] = useState(false);
   const [theme, setTheme] = useState<ThemePref>(getThemePref());
-  const [autostart, setAutostart] = useState(false);
 
   useEffect(() => {
     getSetting<string>("ui.density").then((v) => v && setDensity(v)).catch(() => undefined);
-    getSetting<string>("ui.hotkeyActive")
-      .then((v) => {
-        if (v) {
-          setHotkey(v);
-          setHotkeyCommitted(v);
-        }
-      })
-      .catch(() => undefined);
-    getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
-    getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
-    autostartIsEnabled().then(setAutostart).catch(() => undefined);
   }, []);
-
-  const changeAutostart = (checked: boolean) => {
-    (checked ? autostartEnable() : autostartDisable())
-      .then(() => setAutostart(checked))
-      .catch((e) => notice(String(e)));
-  };
 
   return (
     <div className="page">
-      <h2>外观与快捷键</h2>
-      <p className="page-desc">主题、显示密度、全局快捷键与应用启动行为。</p>
+      <h2>外观</h2>
+      <p className="page-desc">主题与搜索窗列表的显示密度。</p>
 
       <section className="card">
         <div className="card-head">
@@ -99,6 +75,30 @@ export function AppearancePage({ notice }: PageCtx) {
           </select>
         </div>
       </section>
+    </div>
+  );
+}
+
+/** 快捷键：全局呼出。 */
+export function HotkeyPage({ notice }: PageCtx) {
+  const [hotkey, setHotkey] = useState("Alt+Q");
+  const [hotkeyCommitted, setHotkeyCommitted] = useState("");
+
+  useEffect(() => {
+    getSetting<string>("ui.hotkeyActive")
+      .then((v) => {
+        if (v) {
+          setHotkey(v);
+          setHotkeyCommitted(v);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
+  return (
+    <div className="page">
+      <h2>快捷键</h2>
+      <p className="page-desc">全局呼出与隐藏搜索窗的快捷键。</p>
 
       <section className="card">
         <div className="card-head">
@@ -128,57 +128,6 @@ export function AppearancePage({ notice }: PageCtx) {
           />
         </div>
       </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h3>窗口</h3>
-        </div>
-        <div className="toggle-row">
-          <div>
-            <b>失焦自动隐藏</b>
-            <p className="muted">搜索窗失去焦点后自动隐藏，不打断当前工作</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={blurHide}
-            onChange={(e) => {
-              setBlurHide(e.target.checked);
-              setSetting("ui.blurHide", e.target.checked).catch(() => undefined);
-            }}
-          />
-        </div>
-        <div className="toggle-row">
-          <div>
-            <b>隐藏时清空搜索词</b>
-            <p className="muted">开启后窗口隐藏即清空搜索词（避免敏感词残留）；默认关闭，打开文件返回后保留上次搜索</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={clearOnHide}
-            onChange={(e) => {
-              setClearOnHide(e.target.checked);
-              setSetting("ui.clearOnHide", e.target.checked).catch(() => undefined);
-            }}
-          />
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h3>启动</h3>
-        </div>
-        <div className="toggle-row">
-          <div>
-            <b>开机自动启动</b>
-            <p className="muted">登录 Windows 后自动在后台运行，仅显示托盘图标，不弹出主窗口</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={autostart}
-            onChange={(e) => changeAutostart(e.target.checked)}
-          />
-        </div>
-      </section>
     </div>
   );
 }
@@ -186,13 +135,9 @@ export function AppearancePage({ notice }: PageCtx) {
 export function PrivacyPage({ notice }: PageCtx) {
   const [hasKey, setHasKey] = useState(false);
   const [keyInput, setKeyInput] = useState("");
-  const [historyEnabled, setHistoryEnabledState] = useState(true);
 
   useEffect(() => {
     llmHasKey().then(setHasKey).catch(() => undefined);
-    getSetting<boolean>("ui.searchHistoryEnabled")
-      .then((v) => setHistoryEnabledState(v !== null ? !!v : true))
-      .catch(() => undefined);
   }, []);
 
   return (
@@ -217,43 +162,6 @@ export function PrivacyPage({ notice }: PageCtx) {
             <b>日志脱敏</b>
             <p className="muted">诊断日志保留 14 天并对路径做缩短处理，不含文件正文</p>
           </div>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head">
-          <h3>搜索历史</h3>
-        </div>
-        <div className="toggle-row">
-          <div>
-            <b>保留搜索历史</b>
-            <p className="muted">搜索词仅保存在本机，用于搜索框的历史列表；关闭后不再记录，已有记录保留</p>
-          </div>
-          <input
-            type="checkbox"
-            checked={historyEnabled}
-            onChange={(e) => {
-              setHistoryEnabledState(e.target.checked);
-              setSetting("ui.searchHistoryEnabled", e.target.checked).catch((err) =>
-                notice(String(err))
-              );
-            }}
-          />
-        </div>
-        <div className="toggle-row">
-          <div>
-            <b>清空搜索历史</b>
-            <p className="muted">删除全部已保存的搜索词，不可恢复</p>
-          </div>
-          <button
-            className="btn-danger-text"
-            onClick={() =>
-              setSetting("ui.searchHistory", [])
-                .then(() => notice("已清空搜索历史"))
-                .catch((err) => notice(String(err)))
-            }
-          >
-            清空
-          </button>
         </div>
       </section>
       <section className="card">

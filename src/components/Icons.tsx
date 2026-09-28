@@ -185,3 +185,43 @@ export function InfoIcon({ size = 18 }: { size?: number }) {
     </Svg>
   );
 }
+
+export function DatabaseIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <ellipse cx="10" cy="5.4" rx="5.4" ry="2.2" />
+      <path d="M4.6 5.4v9.2c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2V5.4" />
+      <path d="M4.6 10c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2" />
+    </Svg>
+  );
+}
+
+export function DocumentIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M11.6 2.8H6.6a1.6 1.6 0 0 0-1.6 1.6v11.2a1.6 1.6 0 0 0 1.6 1.6h6.8a1.6 1.6 0 0 0 1.6-1.6V6.4z" />
+      <path d="M11.6 2.8v3.6H15" />
+      <path d="M7.8 11h4.4M7.8 13.6h3" />
+    </Svg>
+  );
+}
+
+export function KeyboardIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="2.6" y="5.8" width="14.8" height="8.4" rx="1.8" />
+      <path d="M5.8 8.7h.01M8.5 8.7h.01M11.5 8.7h.01M14.2 8.7h.01" />
+      <path d="M7 11.6h6" />
+    </Svg>
+  );
+}
+
+export function SlidersIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M3 6.6h14M3 13.4h14" />
+      <circle cx="7.6" cy="6.6" r="2" />
+      <circle cx="12.4" cy="13.4" r="2" />
+    </Svg>
+  );
+}

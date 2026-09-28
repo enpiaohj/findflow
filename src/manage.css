@@ -54,12 +54,30 @@
   overflow-y: auto;
 }
 
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group + .nav-group {
+  margin-top: 8px;
+}
+
+.nav-group-title {
+  padding: 4px 12px 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-tertiary);
+}
+
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 38px;
+  height: 34px;
   text-align: left;
   border: none;
   background: transparent;
