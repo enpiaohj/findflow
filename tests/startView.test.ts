@@ -6,6 +6,7 @@ import {
   DEFAULT_START_VIEW,
   getStartViewQueryDefaults,
   resolveStartView,
+  shouldHideBrowseList,
 } from "../src/startView.ts";
 
 const enabledScopes: ScopeInfo[] = [
@@ -105,4 +106,12 @@ test("合法新设置优先于冲突的旧位置", () => {
     setting: { mode: "index", scopeId: 2 },
     needsPersist: false,
   });
+});
+
+test("开启空搜索隐藏时，空搜索且筛选为全部才隐藏列表", () => {
+  assert.equal(shouldHideBrowseList(false, "all", true, false), true);
+  assert.equal(shouldHideBrowseList(false, "all", false, false), false);
+  assert.equal(shouldHideBrowseList(true, "all", true, false), false);
+  assert.equal(shouldHideBrowseList(false, "document", true, false), false);
+  assert.equal(shouldHideBrowseList(false, "all", true, true), false);
 });

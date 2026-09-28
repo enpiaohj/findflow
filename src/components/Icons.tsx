@@ -61,6 +61,14 @@ export function CloseIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+export function ChevronDownIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M5.5 8 10 12.5 14.5 8" />
+    </Svg>
+  );
+}
+
 export function OpenIcon({ size = 16 }: { size?: number }) {
   return (
     <Svg size={size}>

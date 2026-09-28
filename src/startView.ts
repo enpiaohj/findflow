@@ -2,6 +2,7 @@ import type { ScopeInfo } from "./api";
 
 export const START_VIEW_KEY = "ui.startView";
 export const LEGACY_START_LOCATION_KEY = "ui.startLocation";
+export const HIDE_BROWSE_ON_EMPTY_KEY = "ui.hideBrowseOnEmpty";
 
 export type StartViewMode = "index" | "large";
 export type StartViewSort = "relevance" | "name" | "size";
@@ -63,6 +64,16 @@ export function getStartViewQueryDefaults(
   return setting.scopeId === null
     ? { sort: "name" }
     : { sort: "name", scopeId: setting.scopeId };
+}
+
+/** 是否应隐藏空搜索的启动列表（无索引位置时始终不隐藏，保留引导入口）。 */
+export function shouldHideBrowseList(
+  hasQuery: boolean,
+  filter: string,
+  hideOnEmpty: boolean,
+  noScope: boolean,
+): boolean {
+  return hideOnEmpty && !hasQuery && filter === "all" && !noScope;
 }
 
 function parseStartView(value: unknown): StartViewSetting | null {

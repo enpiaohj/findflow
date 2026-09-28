@@ -217,11 +217,11 @@ textarea {
   display: flex;
   align-items: center;
   margin: 4px 16px 0;
-  height: 46px;
-  padding: 0 8px 0 16px;
-  gap: 10px;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  gap: 8px;
   border: 1.5px solid var(--border-strong);
-  border-radius: 23px;
+  border-radius: 20px;
   background: var(--bg);
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
@@ -347,7 +347,7 @@ textarea {
   border: none;
   outline: none;
   background: transparent;
-  font-size: 15.5px;
+  font-size: 14px;
   color: var(--text-primary);
 }
 
@@ -371,6 +371,35 @@ textarea {
 }
 
 .searchbar-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.searchbar-history {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.searchbar-history:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.searchbar-history.open {
+  transform: rotate(180deg);
+}
+
+.searchbar-history:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

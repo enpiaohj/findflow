@@ -25,6 +25,7 @@ import {
 } from "../../api";
 import {
   DEFAULT_START_VIEW,
+  HIDE_BROWSE_ON_EMPTY_KEY,
   LEGACY_START_LOCATION_KEY,
   START_VIEW_KEY,
   resolveStartView,
@@ -67,6 +68,8 @@ export default function IndexPage({ notice }: PageCtx) {
     ...DEFAULT_START_VIEW,
   });
   const [startViewLoaded, setStartViewLoaded] = useState(false);
+  // 空搜索时是否隐藏启动列表；与启动列表设置同一次 Promise.all 读取，故共用 startViewLoaded
+  const [hideOnEmpty, setHideOnEmpty] = useState(false);
 
   const reload = () => {
     scopesList().then(setScopes).catch(() => undefined);
@@ -80,12 +83,14 @@ export default function IndexPage({ notice }: PageCtx) {
       scopesList(),
       getSetting<unknown>(START_VIEW_KEY),
       getSetting<unknown>(LEGACY_START_LOCATION_KEY),
+      getSetting<boolean>(HIDE_BROWSE_ON_EMPTY_KEY),
     ])
-      .then(([nextScopes, currentValue, legacyValue]) => {
+      .then(([nextScopes, currentValue, legacyValue, hideValue]) => {
         if (cancelled) return;
         const resolved = resolveStartView(currentValue, legacyValue, nextScopes);
         setScopes(nextScopes);
         setStartViewState(resolved.setting);
+        setHideOnEmpty(hideValue !== null ? !!hideValue : false);
         setStartViewLoaded(true);
         if (resolved.needsPersist) {
           setSetting(START_VIEW_KEY, resolved.setting).catch((error) =>
@@ -334,6 +339,24 @@ export default function IndexPage({ notice }: PageCtx) {
                 <span className="toggle-on">全部位置</span>
               </div>
             )}
+            <div className="toggle-row">
+              <div>
+                <b>空搜索时隐藏结果</b>
+                <p className="muted">
+                  开启后搜索框为空时不显示启动列表，界面保持空白；输入关键词后才显示结果
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={hideOnEmpty}
+                onChange={(e) => {
+                  setHideOnEmpty(e.target.checked);
+                  setSetting(HIDE_BROWSE_ON_EMPTY_KEY, e.target.checked).catch((error) =>
+                    notice("保存空搜索隐藏设置失败：" + String(error)),
+                  );
+                }}
+              />
+            </div>
           </>
         ) : (
           <div className="toggle-row">

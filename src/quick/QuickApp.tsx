@@ -5,7 +5,7 @@ import TitleBar from "../components/TitleBar";
 import ResultList from "../components/ResultList";
 import FooterBar from "../components/FooterBar";
 import { Toast } from "../components/Toast";
-import { ArrowLeftIcon, CloseIcon, SearchIcon } from "../components/Icons";
+import { ArrowLeftIcon, ChevronDownIcon, CloseIcon, SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
@@ -33,10 +33,12 @@ import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import {
   DEFAULT_START_VIEW,
+  HIDE_BROWSE_ON_EMPTY_KEY,
   LEGACY_START_LOCATION_KEY,
   START_VIEW_KEY,
   getStartViewQueryDefaults,
   resolveStartView,
+  shouldHideBrowseList,
   type StartViewSetting,
 } from "../startView";
 
@@ -80,6 +82,8 @@ export default function QuickApp() {
     ...DEFAULT_START_VIEW,
   });
   const [startViewReady, setStartViewReady] = useState(false);
+  // 空搜索时是否隐藏启动列表（隐私 / 专注选项，默认关闭）
+  const [hideOnEmpty, setHideOnEmpty] = useState(false);
   const [searchSort, setSearchSort] = useState("relevance");
   const [browseSortOverride, setBrowseSortOverride] = useState<string | null>(null);
   // 搜索历史（仅保存在本机，可在设置关闭或清空）
@@ -142,13 +146,15 @@ export default function QuickApp() {
     searchGen.current += 1;
     setStartViewReady(false);
     try {
-      const [nextScopes, currentValue, legacyValue] = await Promise.all([
+      const [nextScopes, currentValue, legacyValue, hideValue] = await Promise.all([
         scopesList(),
         getSetting<unknown>(START_VIEW_KEY),
         getSetting<unknown>(LEGACY_START_LOCATION_KEY),
+        getSetting<boolean>(HIDE_BROWSE_ON_EMPTY_KEY),
       ]);
       const resolved = resolveStartView(currentValue, legacyValue, nextScopes);
       setStartViewState(resolved.setting);
+      setHideOnEmpty(hideValue !== null ? !!hideValue : false);
       setBrowseSortOverride(null);
       if (resolved.needsPersist) {
         setSetting(START_VIEW_KEY, resolved.setting).catch((error) =>
@@ -239,6 +245,8 @@ export default function QuickApp() {
   const activeSort = hasQuery ? searchSort : browseSortOverride ?? browseDefaultSort;
   const visibleSorts = hasQuery ? SORTS : SORTS.filter((option) => option.id !== "relevance");
   const browseNoScope = !hasQuery && startView.mode === "index" && startView.scopeId === null;
+  // 开启「空搜索时隐藏结果」后，空搜索且未选筛选时列表区域完全空白（无索引位置时仍显示引导）
+  const browseHidden = shouldHideBrowseList(hasQuery, filter, hideOnEmpty, browseNoScope);
 
   const changeSort = useCallback(
     (next: string) => {
@@ -260,7 +268,7 @@ export default function QuickApp() {
     if (!startViewReady) return;
 
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
-    if (browseNoScope) {
+    if (browseNoScope || browseHidden) {
       searchGen.current += 1;
       setItems([]);
       setTotal(0);
@@ -283,6 +291,7 @@ export default function QuickApp() {
       });
   }, [
     activeSort,
+    browseHidden,
     filter,
     hasQuery,
     notice,
@@ -303,18 +312,10 @@ export default function QuickApp() {
     setSelectedIndex(0);
   }, [activeSort, filter, query, startView.mode, startView.scopeId]);
 
-  // 有输入词时历史下拉收起；清空且输入框仍聚焦（ESC 清词、启动自动聚焦早于历史加载）时自动展开
+  // 有输入词时自动收起历史下拉；展开只由搜索框内的下拉箭头控制，默认不自动弹出
   useEffect(() => {
-    if (hasQuery) {
-      setHistoryOpen(false);
-    } else if (
-      document.activeElement === inputRef.current &&
-      historyEnabled &&
-      history.length > 0
-    ) {
-      setHistoryOpen(true);
-    }
-  }, [hasQuery, history, historyEnabled]);
+    if (hasQuery) setHistoryOpen(false);
+  }, [hasQuery]);
 
   // 索引进度仅在设置内查看；扫描结束后刷新索引总数
   const wasScanning = useRef(false);
@@ -466,11 +467,6 @@ export default function QuickApp() {
               placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d）"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              onFocus={() => {
-                if (!hasQuery && historyEnabledRef.current && historyRef.current.length > 0) {
-                  setHistoryOpen(true);
-                }
-              }}
               autoFocus
             />
             {query ? (
@@ -488,7 +484,20 @@ export default function QuickApp() {
                 <CloseIcon size={14} />
               </button>
             ) : null}
-            {historyOpen && !hasQuery && historyEnabled ? (
+            {historyEnabled && history.length > 0 ? (
+              <button
+                type="button"
+                className={"searchbar-history" + (historyOpen ? " open" : "")}
+                aria-label={historyOpen ? "收起搜索历史" : "展开搜索历史"}
+                aria-expanded={historyOpen}
+                title="搜索历史"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setHistoryOpen((value) => !value)}
+              >
+                <ChevronDownIcon size={16} />
+              </button>
+            ) : null}
+            {historyOpen && historyEnabled ? (
               <SearchHistory
                 items={history}
                 onPick={(term) => {
@@ -504,32 +513,34 @@ export default function QuickApp() {
                 onClose={() => setHistoryOpen(false)}
               />
             ) : null}
-            <div
-              className="sort-wrap"
-              onBlur={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false);
-              }}
-            >
-              <button className="sort-btn" onClick={() => setSortOpen((value) => !value)}>
-                {SORTS.find((option) => option.id === activeSort)?.label} ▾
-              </button>
-              {sortOpen ? (
-                <div className="sort-menu">
-                  {visibleSorts.map((option) => (
-                    <button
-                      key={option.id}
-                      className={option.id === activeSort ? "active" : ""}
-                      onClick={() => {
-                        changeSort(option.id);
-                        setSortOpen(false);
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            {browseHidden ? null : (
+              <div
+                className="sort-wrap"
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setSortOpen(false);
+                }}
+              >
+                <button className="sort-btn" onClick={() => setSortOpen((value) => !value)}>
+                  {SORTS.find((option) => option.id === activeSort)?.label} ▾
+                </button>
+                {sortOpen ? (
+                  <div className="sort-menu">
+                    {visibleSorts.map((option) => (
+                      <button
+                        key={option.id}
+                        className={option.id === activeSort ? "active" : ""}
+                        onClick={() => {
+                          changeSort(option.id);
+                          setSortOpen(false);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
             <span className="searchbar-kbd">{hotkey}</span>
           </div>
           <FilterBar
@@ -537,25 +548,30 @@ export default function QuickApp() {
             onFilterChange={setFilter}
             density={density}
             onDensityChange={changeDensity}
-            count={items.length}
+            count={browseHidden ? undefined : items.length}
             limited={items.length >= 200}
           />
-          <ResultList
-            items={items}
-            density={density}
-            selectedIndex={selectedIndex}
-            sort={activeSort}
-            onSort={changeSort}
-            onSelect={setSelectedIndex}
-            onNotice={notice}
-            onMenu={(item, pos) => {
-              setMenuPos(pos);
-              setMenuFor(item);
-            }}
-            onOpenSettings={() => setSettingsOpen(true)}
-            emptyReason={browseNoScope ? "no-scope" : undefined}
+          {browseHidden ? null : (
+            <ResultList
+              items={items}
+              density={density}
+              selectedIndex={selectedIndex}
+              sort={activeSort}
+              onSort={changeSort}
+              onSelect={setSelectedIndex}
+              onNotice={notice}
+              onMenu={(item, pos) => {
+                setMenuPos(pos);
+                setMenuFor(item);
+              }}
+              onOpenSettings={() => setSettingsOpen(true)}
+              emptyReason={browseNoScope ? "no-scope" : undefined}
+            />
+          )}
+          <FooterBar
+            total={browseHidden ? undefined : total}
+            elapsed={browseHidden ? undefined : elapsed}
           />
-          <FooterBar total={total} elapsed={elapsed} />
         </>
       )}
       {menuFor ? (

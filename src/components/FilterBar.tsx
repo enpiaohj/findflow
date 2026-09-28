@@ -23,9 +23,10 @@ interface Props {
   onFilterChange: (filter: FilterId) => void;
   density: Density;
   onDensityChange: (density: Density) => void;
-  count: number;
+  /** 结果条数；空搜索隐藏结果时不传，不显示计数 */
+  count?: number;
   /** 结果达到返回上限（实际命中可能更多） */
-  limited: boolean;
+  limited?: boolean;
 }
 
 export default function FilterBar({
@@ -50,9 +51,14 @@ export default function FilterBar({
         ))}
       </div>
       <div className="filterbar-meta">
-        <span className="filterbar-count" title={limited ? "仅显示最相关的前若干项，可继续输入缩小范围" : undefined}>
-          {limited ? `前 ${count} 项` : `共 ${count} 项`}
-        </span>
+        {count === undefined ? null : (
+          <span
+            className="filterbar-count"
+            title={limited ? "仅显示最相关的前若干项，可继续输入缩小范围" : undefined}
+          >
+            {limited ? `前 ${count} 项` : `共 ${count} 项`}
+          </span>
+        )}
         <div className="density-switch" role="group" aria-label="显示密度">
           {DENSITIES.map((d) => (
             <button
