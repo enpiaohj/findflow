@@ -24,7 +24,7 @@
         "decorations": false,
         "shadow": true,
         "skipTaskbar": false,
-        "visible": true
+        "visible": false
       }
     ],    "security": {
       "csp": null

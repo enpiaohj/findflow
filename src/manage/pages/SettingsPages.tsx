@@ -8,6 +8,9 @@ import {
   llmSetKey,
   llmClearKey,
   hotkeyApply,
+  autostartIsEnabled,
+  autostartEnable,
+  autostartDisable,
 } from "../../api";
 import { getThemePref, setThemePref, type ThemePref } from "../../theme";
 
@@ -18,6 +21,7 @@ export function AppearancePage({ notice }: PageCtx) {
   const [blurHide, setBlurHide] = useState(true);
   const [clearOnHide, setClearOnHide] = useState(false);
   const [theme, setTheme] = useState<ThemePref>(getThemePref());
+  const [autostart, setAutostart] = useState(false);
 
   useEffect(() => {
     getSetting<string>("ui.density").then((v) => v && setDensity(v)).catch(() => undefined);
@@ -31,13 +35,24 @@ export function AppearancePage({ notice }: PageCtx) {
       .catch(() => undefined);
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
     getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
+    autostartIsEnabled().then(setAutostart).catch(() => undefined);
   }, []);
+
+  const changeAutostart = (checked: boolean) => {
+    (checked ? autostartEnable() : autostartDisable())
+      .then(() => setAutostart(checked))
+      .catch((e) => notice(String(e)));
+  };
 
   return (
     <div className="page">
       <h2>外观与快捷键</h2>
-      <p className="page-desc">主题、显示密度与全局快捷键。</p>
+      <p className="page-desc">主题、显示密度、全局快捷键与应用启动行为。</p>
+
       <section className="card">
+        <div className="card-head">
+          <h3>外观</h3>
+        </div>
         <div className="toggle-row">
           <div>
             <b>主题</b>
@@ -83,6 +98,12 @@ export function AppearancePage({ notice }: PageCtx) {
             <option value="large">大图标</option>
           </select>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>快捷键</h3>
+        </div>
         <div className="toggle-row">
           <div>
             <b>全局快捷键</b>
@@ -105,6 +126,12 @@ export function AppearancePage({ notice }: PageCtx) {
                 });
             }}
           />
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>窗口</h3>
         </div>
         <div className="toggle-row">
           <div>
@@ -132,6 +159,23 @@ export function AppearancePage({ notice }: PageCtx) {
               setClearOnHide(e.target.checked);
               setSetting("ui.clearOnHide", e.target.checked).catch(() => undefined);
             }}
+          />
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>启动</h3>
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>开机自动启动</b>
+            <p className="muted">登录 Windows 后自动在后台运行，仅显示托盘图标，不弹出主窗口</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={autostart}
+            onChange={(e) => changeAutostart(e.target.checked)}
           />
         </div>
       </section>

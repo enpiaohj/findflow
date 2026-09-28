@@ -13,6 +13,9 @@
     "core:window:allow-start-dragging",
     "core:webview:allow-internal-toggle-devtools",
     "dialog:default",
-    "opener:default"
+    "opener:default",
+    "autostart:allow-is-enabled",
+    "autostart:allow-enable",
+    "autostart:allow-disable"
   ]
 }

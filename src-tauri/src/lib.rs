@@ -73,6 +73,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // 开机自启：带 --ff-autostart 参数静默启动到托盘，不弹出主窗
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--ff-autostart"]),
+        ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -91,6 +96,17 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // 开机自启时静默启动到托盘；正常启动立即显示主窗
+            let autostart_launch = std::env::args().any(|arg| arg == "--ff-autostart");
+            if let Some(w) = app.get_webview_window("main") {
+                if autostart_launch {
+                    let _ = w.hide();
+                } else {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+
             let default_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&default_dir)?;
             // 存储位置：默认目录下的 storage-location.txt 指向自定义目录；

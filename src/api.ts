@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isEnabled as autostartIsEnabledRaw, enable as autostartEnableRaw, disable as autostartDisableRaw } from "@tauri-apps/plugin-autostart";
 
 export interface FileRow {
   fileId: number;
@@ -202,6 +203,10 @@ export const fileByPath = (path: string): Promise<FileRow | null> => invoke("fil
 
 export const hotkeyApply = (hotkey: string): Promise<void> =>
   invoke("hotkey_apply", { newHotkey: hotkey });
+
+export const autostartIsEnabled = (): Promise<boolean> => autostartIsEnabledRaw();
+export const autostartEnable = (): Promise<void> => autostartEnableRaw();
+export const autostartDisable = (): Promise<void> => autostartDisableRaw();
 export interface StorageUsage {
   dataDir: string;
   dbBytes: number;
