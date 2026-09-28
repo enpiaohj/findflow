@@ -217,6 +217,12 @@ export const storageUsage = (): Promise<StorageUsage> => invoke('storage_usage')
 export const setDataDir = (newDir: string): Promise<void> => invoke('set_data_dir', { newDir });
 export const relaunchApp = (): Promise<void> => invoke('relaunch_app');
 
+/** 显示或隐藏系统托盘图标（对应设置 ui.showTrayIcon）。 */
+export const traySetVisible = (visible: boolean): Promise<void> =>
+  invoke("tray_set_visible", { visible });
+/** 完全退出应用：关闭窗口只隐藏到后台。 */
+export const appExit = (): Promise<void> => invoke("app_exit");
+
 export const updaterCheck = (): Promise<{ available: boolean; version: string | null }> =>
   invoke("updater_check");
 export const updaterInstall = (): Promise<void> => invoke("updater_install");

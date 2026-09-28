@@ -22,14 +22,13 @@ pub mod searchindex;
 pub mod settings;
 pub mod shellicon;
 pub mod tokenizer;
+pub mod tray;
 pub mod updater_cmd;
 pub mod util;
 pub mod watcher;
 
 use std::sync::{Arc, OnceLock};
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -264,45 +263,17 @@ pub fn run() {
                 }
             }
 
+            // 托盘是否显示由设置决定；必须在 manage 之前读取（state 随后被 move 进托管）
+            let show_tray = state
+                .db
+                .get_or("ui.showTrayIcon", serde_json::json!(true))
+                .as_bool()
+                .unwrap_or(true);
             app.manage(state);
 
-            // 系统托盘：左键呼出主窗（不做显隐切换，避免与失焦隐藏竞争），
-            // 右键菜单提供「显示 FindFlow」「退出」——关闭按钮只隐藏窗口，退出由此入口承担
-            let show_item = MenuItem::with_id(app, "show", "显示 FindFlow", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().expect("应用图标已配置").clone())
-                .tooltip("FindFlow")
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                })
-                .build(app)?;
+            // 系统托盘：左键呼出主窗，右键菜单提供「显示 FindFlow」「退出」——
+            // 关闭按钮只隐藏窗口，退出由此入口承担
+            tray::build(app.handle(), show_tray)?;
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -326,6 +297,8 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            tray::tray_set_visible,
+            tray::app_exit,
             settings::get_setting,
             settings::set_setting,
             settings::delete_setting,

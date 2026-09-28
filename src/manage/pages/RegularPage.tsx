@@ -1,16 +1,28 @@
 import { useEffect, useState } from "react";
 import type { PageCtx } from "../ManageBody";
-import { getSetting, setSetting, autostartIsEnabled, autostartEnable, autostartDisable } from "../../api";
+import {
+  getSetting,
+  setSetting,
+  autostartIsEnabled,
+  autostartEnable,
+  autostartDisable,
+  traySetVisible,
+  appExit,
+} from "../../api";
 
-/** 常规：应用启动与窗口行为。 */
+/** 常规：应用启动、窗口行为与退出。 */
 export default function RegularPage({ notice }: PageCtx) {
   const [blurHide, setBlurHide] = useState(true);
   const [clearOnHide, setClearOnHide] = useState(false);
   const [autostart, setAutostart] = useState(false);
+  const [showTray, setShowTray] = useState(true);
 
   useEffect(() => {
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
     getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
+    getSetting<boolean>("ui.showTrayIcon")
+      .then((v) => setShowTray(v !== null ? !!v : true))
+      .catch(() => undefined);
     autostartIsEnabled().then(setAutostart).catch(() => undefined);
   }, []);
 
@@ -18,6 +30,12 @@ export default function RegularPage({ notice }: PageCtx) {
     (checked ? autostartEnable() : autostartDisable())
       .then(() => setAutostart(checked))
       .catch((e) => notice(String(e)));
+  };
+
+  const changeShowTray = (checked: boolean) => {
+    setShowTray(checked);
+    setSetting("ui.showTrayIcon", checked).catch((e) => notice(String(e)));
+    traySetVisible(checked).catch((e) => notice(String(e)));
   };
 
   return (
@@ -73,6 +91,37 @@ export default function RegularPage({ notice }: PageCtx) {
               setSetting("ui.clearOnHide", e.target.checked).catch(() => undefined);
             }}
           />
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>显示托盘图标</b>
+            <p className="muted">
+              关闭后托盘区不再显示图标；仍可用全局快捷键呼出窗口，或回到本页重新打开
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={showTray}
+            onChange={(e) => changeShowTray(e.target.checked)}
+          />
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>退出</h3>
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>退出 FindFlow</b>
+            <p className="muted">完全结束进程；关闭窗口只是隐藏到后台，不会退出</p>
+          </div>
+          <button
+            className="btn-danger-text"
+            onClick={() => appExit().catch((e) => notice(String(e)))}
+          >
+            退出
+          </button>
         </div>
       </section>
     </div>
