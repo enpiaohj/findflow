@@ -22,6 +22,14 @@ import {
   scopesList,
   type FileRow,
 } from "../api";
+import {
+  SEARCH_HISTORY_ENABLED_KEY,
+  SEARCH_HISTORY_KEY,
+  parseSearchHistory,
+  recordSearch,
+  removeSearch,
+} from "../searchHistory";
+import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import {
   DEFAULT_START_VIEW,
@@ -74,6 +82,10 @@ export default function QuickApp() {
   const [startViewReady, setStartViewReady] = useState(false);
   const [searchSort, setSearchSort] = useState("relevance");
   const [browseSortOverride, setBrowseSortOverride] = useState<string | null>(null);
+  // 搜索历史（仅保存在本机，可在设置关闭或清空）
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyEnabled, setHistoryEnabled] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   // 搜索竞态守卫：过期响应不得覆盖新结果（设计文档 §11）
@@ -84,6 +96,47 @@ export default function QuickApp() {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+
+  // 失焦处理器（依赖为空）需要读取最新值，用 ref 镜像
+  const queryRef = useRef("");
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
+  const historyRef = useRef<string[]>([]);
+  const historyEnabledRef = useRef(true);
+  useEffect(() => {
+    historyEnabledRef.current = historyEnabled;
+  }, [historyEnabled]);
+
+  const applyHistory = useCallback((next: string[]) => {
+    historyRef.current = next;
+    setHistory(next);
+  }, []);
+
+  // 记录搜索词：去重置顶后持久化（Enter 或窗口隐藏时调用）
+  const recordSearchTerm = useCallback(
+    (term: string) => {
+      if (!historyEnabledRef.current) return;
+      const next = recordSearch(historyRef.current, term);
+      if (next === historyRef.current) return;
+      applyHistory(next);
+      setSetting(SEARCH_HISTORY_KEY, next).catch(() => undefined);
+    },
+    [applyHistory],
+  );
+
+  const removeHistoryTerm = useCallback(
+    (term: string) => {
+      applyHistory(removeSearch(historyRef.current, term));
+      setSetting(SEARCH_HISTORY_KEY, historyRef.current).catch(() => undefined);
+    },
+    [applyHistory],
+  );
+
+  const clearHistory = useCallback(() => {
+    applyHistory([]);
+    setSetting(SEARCH_HISTORY_KEY, []).catch(() => undefined);
+  }, [applyHistory]);
 
   const refreshStartView = useCallback(async () => {
     searchGen.current += 1;
@@ -123,12 +176,31 @@ export default function QuickApp() {
     getSetting<boolean>(CLEAR_ON_HIDE_KEY)
       .then((v) => setClearOnHide(!!v))
       .catch(() => undefined);
+    getSetting<boolean>(SEARCH_HISTORY_ENABLED_KEY)
+      .then((v) => setHistoryEnabled(v !== null ? !!v : true))
+      .catch(() => undefined);
   }, []);
 
   // 索引位置与启动列表设置：启动与关闭设置视图后刷新
   useEffect(() => {
     if (!settingsOpen) void refreshStartView();
   }, [refreshStartView, settingsOpen]);
+
+  // 搜索历史：启动与关闭设置视图后刷新（设置页可能已关闭或清空历史）
+  const reloadHistory = useCallback(() => {
+    Promise.all([
+      getSetting<unknown>(SEARCH_HISTORY_KEY),
+      getSetting<boolean>(SEARCH_HISTORY_ENABLED_KEY),
+    ])
+      .then(([raw, enabled]) => {
+        applyHistory(parseSearchHistory(raw));
+        setHistoryEnabled(enabled !== null ? !!enabled : true);
+      })
+      .catch(() => undefined);
+  }, [applyHistory]);
+  useEffect(() => {
+    if (!settingsOpen) reloadHistory();
+  }, [reloadHistory, settingsOpen]);
 
   // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
   const settingsOpenRef = useRef(false);
@@ -144,8 +216,13 @@ export default function QuickApp() {
     const win = getCurrentWindow();
     const unlistenP = win.onFocusChanged(({ payload: focused }) => {
       if (!focused) {
+        // 隐藏前记录当前搜索词（设置视图打开期间不记录，用户可能正在编辑）
+        if (!settingsOpenRef.current && queryRef.current.trim()) {
+          recordSearchTerm(queryRef.current);
+        }
         // 仅在用户开启隐私选项时清空搜索词；设置视图打开期间一律保留（用户可能正在编辑）
         if (!settingsOpenRef.current && clearOnHideRef.current) setQuery("");
+        setHistoryOpen(false);
         setPreviewOpen(false);
         setMenuFor(null);
         setSortOpen(false);
@@ -154,7 +231,7 @@ export default function QuickApp() {
       }
     });
     return () => void unlistenP.then((f) => f());
-  }, []);
+  }, [recordSearchTerm]);
 
   const hasQuery = query.trim().length > 0;
   const queryDefaults = getStartViewQueryDefaults(startView, hasQuery);
@@ -226,6 +303,19 @@ export default function QuickApp() {
     setSelectedIndex(0);
   }, [activeSort, filter, query, startView.mode, startView.scopeId]);
 
+  // 有输入词时历史下拉收起；清空且输入框仍聚焦（ESC 清词、启动自动聚焦早于历史加载）时自动展开
+  useEffect(() => {
+    if (hasQuery) {
+      setHistoryOpen(false);
+    } else if (
+      document.activeElement === inputRef.current &&
+      historyEnabled &&
+      history.length > 0
+    ) {
+      setHistoryOpen(true);
+    }
+  }, [hasQuery, history, historyEnabled]);
+
   // 索引进度仅在设置内查看；扫描结束后刷新索引总数
   const wasScanning = useRef(false);
   useEffect(() => {
@@ -289,6 +379,11 @@ export default function QuickApp() {
         inputEl.selectionEnd !== null &&
         inputEl.selectionStart !== inputEl.selectionEnd;
 
+      if (event.key === "Escape" && historyOpen) {
+        event.preventDefault();
+        setHistoryOpen(false);
+        return;
+      }
       if (event.key === "ArrowDown" && items.length > 0) {
         event.preventDefault();
         setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
@@ -297,6 +392,8 @@ export default function QuickApp() {
         setSelectedIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "Enter" && !hasTextSelection) {
         event.preventDefault();
+        // 明确的回车动作视为一次搜索提交，记录进历史（去重由 recordSearch 处理）
+        if (hasQuery) recordSearchTerm(query);
         const it = items[selectedIndex];
         if (!it) return;
         if (event.ctrlKey) {
@@ -340,7 +437,7 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, previewOpen, menuFor, settingsOpen, notice]
+    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, settingsOpen, notice, recordSearchTerm]
   );
 
   return (
@@ -369,8 +466,29 @@ export default function QuickApp() {
               placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d）"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onFocus={() => {
+                if (!hasQuery && historyEnabledRef.current && historyRef.current.length > 0) {
+                  setHistoryOpen(true);
+                }
+              }}
               autoFocus
             />
+            {historyOpen && !hasQuery && historyEnabled ? (
+              <SearchHistory
+                items={history}
+                onPick={(term) => {
+                  setQuery(term);
+                  setHistoryOpen(false);
+                  inputRef.current?.focus();
+                }}
+                onRemove={removeHistoryTerm}
+                onClear={() => {
+                  clearHistory();
+                  setHistoryOpen(false);
+                }}
+                onClose={() => setHistoryOpen(false)}
+              />
+            ) : null}
             <div
               className="sort-wrap"
               onBlur={(e) => {

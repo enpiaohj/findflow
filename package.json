@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:start-view": "vite build --ssr tests/startView.test.ts --outDir dist/start-view-tests --emptyOutDir && node --test dist/start-view-tests/startView.test.js"
+    "test:unit": "vite build --ssr tests/unit.test.ts --outDir dist/unit-tests --emptyOutDir && node --test dist/unit-tests/unit.test.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.0",
