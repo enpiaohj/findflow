@@ -82,6 +82,21 @@ pub fn run(
                 // 走 idx_files_scope 索引
                 where_parts.push("f.scope_id = ?".into());
                 bind.push(Box::new(sid));
+                // 空搜索浏览为资源管理器式：只列出该索引位置根目录的第一层。
+                // scope_id 仅由前端在无关键词时传入，关键词搜索不受影响
+                if !has_text {
+                    let root: Option<String> = c
+                        .query_row(
+                            "SELECT path FROM scopes WHERE scope_id = ?1",
+                            [sid],
+                            |r| r.get(0),
+                        )
+                        .ok();
+                    if let Some(root) = root {
+                        where_parts.push("f.parent_path = ?".into());
+                        bind.push(Box::new(root));
+                    }
+                }
             }
         }
         if !ast.exts.is_empty() {
@@ -269,6 +284,7 @@ pub fn run(
 
 /// 索引总数（UI 显示“共 N 项”）：百万级 COUNT(*) 需数十毫秒，每次按键都算会拖慢输入，
 /// 缓存 10 秒即可满足显示需要。单槽缓存键含位置：切换位置或超时才重算。
+/// 指定位置时与空搜索浏览一致，只统计该位置根目录第一层。
 fn cached_total(
     store: &crate::settings::SettingsStore,
     scope_id: Option<i64>,
@@ -283,7 +299,18 @@ fn cached_total(
     }
     let n: i64 = store.with_conn(|c| {
         if let Some(sid) = scope_id {
-            c.query_row("SELECT COUNT(*) FROM files WHERE scope_id = ?1", [sid], |r| r.get(0))
+            // 与空搜索浏览一致：只统计该位置根目录第一层（位置不存在则计 0）
+            let root: Option<String> = c
+                .query_row("SELECT path FROM scopes WHERE scope_id = ?1", [sid], |r| r.get(0))
+                .ok();
+            match root {
+                Some(root) => c.query_row(
+                    "SELECT COUNT(*) FROM files WHERE scope_id = ?1 AND parent_path = ?2",
+                    rusqlite::params![sid, root],
+                    |r| r.get(0),
+                ),
+                None => Ok(0),
+            }
         } else {
             c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
         }
@@ -356,7 +383,7 @@ pub async fn cmd_search(
 mod tests {
     use super::*;
 
-    /// 空搜索浏览：scope_id 限定范围，名称与大小排序保持稳定。
+    /// 空搜索浏览：scope_id 限定范围且仅列根目录第一层，名称与大小排序保持稳定。
     #[test]
     fn scope_filter_and_browse_sorts() {
         let dir = tempfile::tempdir().unwrap();
@@ -368,14 +395,17 @@ mod tests {
                 [],
             )
             .unwrap();
-            for (sid, name, size) in [
-                (1, "zeta.txt", 30_i64),
-                (1, "alpha.txt", 10_i64),
-                (2, "beta.txt", 20_i64),
+            for (sid, name, size, parent) in [
+                (1, "zeta.txt", 30_i64, "D:/a"),
+                (1, "alpha.txt", 10_i64, "D:/a"),
+                (2, "beta.txt", 20_i64, "D:/b"),
+                // 子目录内的文件：属于该范围，但不属于根目录第一层
+                (1, "deep.txt", 40_i64, "D:/a/sub"),
             ] {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size) VALUES (?1, ?2, ?3, 'doc', ?4)",
-                    rusqlite::params![sid, name, format!("D:/x/{name}"), size],
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (?1, ?2, ?3, 'doc', ?4, ?5)",
+                    rusqlite::params![sid, name, format!("{parent}\\{name}"), size, parent],
                 )
                 .unwrap();
             }
@@ -391,14 +421,15 @@ mod tests {
                 .iter()
                 .map(|item| item.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["zeta.txt", "beta.txt", "alpha.txt"]
+            vec!["deep.txt", "zeta.txt", "beta.txt", "alpha.txt"]
         );
-        assert_eq!(all.total, 3);
+        assert_eq!(all.total, 4);
 
         let by_name = QueryAst {
             sort: SortMode::Name,
             ..Default::default()
         };
+        // 指定位置：只返回该位置根目录第一层的条目，子目录内的 deep.txt 不出现
         let scoped = run(&store, &index, &by_name, 10, Some(1)).unwrap();
         assert_eq!(
             scoped
@@ -411,8 +442,8 @@ mod tests {
         assert_eq!(scoped.total, 2);
 
         // 不存在的位置：结果为空
-        let none = run(&store, &index, &by_name, 10, Some(99)).unwrap();
-        assert!(none.items.is_empty());
-        assert_eq!(none.total, 0);
+        let unknown_scope = run(&store, &index, &by_name, 10, Some(99)).unwrap();
+        assert!(unknown_scope.items.is_empty());
+        assert_eq!(unknown_scope.total, 0);
     }
 }

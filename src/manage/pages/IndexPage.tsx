@@ -305,7 +305,7 @@ export default function IndexPage({ notice }: PageCtx) {
               <div className="toggle-row">
                 <div>
                   <b>默认索引位置</b>
-                  <p className="muted">空搜索时列出该位置下的全部索引内容，并按名称排序</p>
+                  <p className="muted">空搜索时列出该位置根目录下的文件和文件夹，并按名称排序</p>
                 </div>
                 <select
                   value={resolvedStartView.scopeId ?? ""}
