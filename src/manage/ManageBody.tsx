@@ -4,13 +4,13 @@ import SpacePage from "./pages/SpacePage";
 import BatchPage from "./pages/BatchPage";
 import TasksPage from "./pages/TasksPage";
 import LibraryPage from "./pages/LibraryPage";
-import { AppearancePage, PrivacyPage, UpdatePage } from "./pages/SettingsPages";
+import { AppearancePage, PrivacyPage, AboutPage } from "./pages/SettingsPages";
 import {
   ChartIcon,
+  InfoIcon,
   LayersIcon,
   MonitorIcon,
   PulseIcon,
-  RefreshIcon,
   SearchIcon,
   ShieldIcon,
   StarIcon,
@@ -24,7 +24,7 @@ const NAV = [
   { id: "library", label: "收藏与标签", el: LibraryPage, icon: StarIcon },
   { id: "appearance", label: "外观与快捷键", el: AppearancePage, icon: MonitorIcon },
   { id: "privacy", label: "隐私与安全", el: PrivacyPage, icon: ShieldIcon },
-  { id: "update", label: "更新", el: UpdatePage, icon: RefreshIcon },
+  { id: "about", label: "关于", el: AboutPage, icon: InfoIcon },
 ] as const;
 
 export type PageCtx = { notice: (m: string) => void; refresh: () => void };

@@ -167,3 +167,13 @@ export function ArrowLeftIcon({ size = 16 }: { size?: number }) {
     </Svg>
   );
 }
+
+export function InfoIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <circle cx="10" cy="10" r="6.5" />
+      <path d="M10 9v4.5" />
+      <path d="M10 6.6v.2" />
+    </Svg>
+  );
+}

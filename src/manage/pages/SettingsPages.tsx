@@ -186,9 +186,13 @@ export function AppearancePage({ notice }: PageCtx) {
 export function PrivacyPage({ notice }: PageCtx) {
   const [hasKey, setHasKey] = useState(false);
   const [keyInput, setKeyInput] = useState("");
+  const [historyEnabled, setHistoryEnabledState] = useState(true);
 
   useEffect(() => {
     llmHasKey().then(setHasKey).catch(() => undefined);
+    getSetting<boolean>("ui.searchHistoryEnabled")
+      .then((v) => setHistoryEnabledState(v !== null ? !!v : true))
+      .catch(() => undefined);
   }, []);
 
   return (
@@ -199,7 +203,7 @@ export function PrivacyPage({ notice }: PageCtx) {
         <div className="toggle-row">
           <div>
             <b>本地优先</b>
-            <p className="muted">基础搜索完全本地完成；不上传文件名、路径、内容或搜索词；搜索词不落盘</p>
+            <p className="muted">基础搜索完全本地完成；不上传文件名、路径、内容或搜索词</p>
           </div>
         </div>
         <div className="toggle-row">
@@ -213,6 +217,43 @@ export function PrivacyPage({ notice }: PageCtx) {
             <b>日志脱敏</b>
             <p className="muted">诊断日志保留 14 天并对路径做缩短处理，不含文件正文</p>
           </div>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h3>搜索历史</h3>
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>保留搜索历史</b>
+            <p className="muted">搜索词仅保存在本机，用于搜索框的历史列表；关闭后不再记录，已有记录保留</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={historyEnabled}
+            onChange={(e) => {
+              setHistoryEnabledState(e.target.checked);
+              setSetting("ui.searchHistoryEnabled", e.target.checked).catch((err) =>
+                notice(String(err))
+              );
+            }}
+          />
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>清空搜索历史</b>
+            <p className="muted">删除全部已保存的搜索词，不可恢复</p>
+          </div>
+          <button
+            className="btn-danger-text"
+            onClick={() =>
+              setSetting("ui.searchHistory", [])
+                .then(() => notice("已清空搜索历史"))
+                .catch((err) => notice(String(err)))
+            }
+          >
+            清空
+          </button>
         </div>
       </section>
       <section className="card">
@@ -266,7 +307,7 @@ export function PrivacyPage({ notice }: PageCtx) {
   );
 }
 
-export function UpdatePage({ notice: _notice }: PageCtx) {
+export function AboutPage({ notice: _notice }: PageCtx) {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
@@ -278,15 +319,42 @@ export function UpdatePage({ notice: _notice }: PageCtx) {
 
   return (
     <div className="page">
-      <h2>更新</h2>
-      <p className="page-desc">查看 FindFlow 的版本信息。</p>
+      <h2>关于</h2>
+      <p className="page-desc">FindFlow 的版本与项目信息。</p>
       <section className="card">
-        <div className="toggle-row">
-          <div>
-            <b>当前版本</b>
-            <p className="muted">{version ? `v${version}` : "读取中…"}</p>
-          </div>
+        <div className="about-head">
+          <b className="about-name">FindFlow</b>
+          <span className="muted">Windows 本地优先的极速文件搜索工具</span>
         </div>
+        <div className="about-row">
+          <span className="about-label">版本</span>
+          <span>{version ? `v${version}` : "读取中…"}</span>
+        </div>
+        <div className="about-row">
+          <span className="about-label">开发者</span>
+          <a href="https://github.com/enpiaohj" target="_blank" rel="noreferrer">
+            enpiaohj（GitHub）
+          </a>
+        </div>
+        <div className="about-row">
+          <span className="about-label">源码仓库</span>
+          <a href="https://github.com/enpiaohj/findflow" target="_blank" rel="noreferrer">
+            https://github.com/enpiaohj/findflow
+          </a>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h3>隐私与数据</h3>
+        </div>
+        <p className="muted">
+          FindFlow 不收集遥测、崩溃报告或使用统计，不向任何第三方发送数据。搜索索引、设置与搜索历史（如开启）均仅保存在本机，
+          可在「隐私与安全」中关闭或清空搜索历史。
+        </p>
+        <p className="muted">
+          唯一的外部请求来自可选的「自然语言搜索」：仅在配置 DeepSeek API Key 并主动使用该功能时，
+          把查询文本与字段定义发送给 DeepSeek，仅返回查询条件，不发送任何本地文件数据。
+        </p>
       </section>
     </div>
   );

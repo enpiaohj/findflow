@@ -656,3 +656,30 @@
   display: inline-block;
   flex-shrink: 0;
 }
+
+/* 关于页 */
+.about-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.about-name {
+  font-size: 22px;
+  letter-spacing: 0.2px;
+}
+
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 0;
+  font-size: 13.5px;
+}
+
+.about-label {
+  flex: none;
+  width: 72px;
+  color: var(--text-secondary);
+}
