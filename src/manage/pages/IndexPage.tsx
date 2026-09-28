@@ -133,6 +133,11 @@ export default function IndexPage({ notice }: PageCtx) {
   };
 
   const enabledScopes = scopes.filter((scope) => scope.enabled);
+  // 渲染期直接派生显示用的启动列表设置：读取完成前不渲染，位置失效时无需等回退 effect 提交，
+  // 避免「索引内容」按钮闪现与下拉短暂空白（显示与数据始终一致）
+  const resolvedStartView = startViewLoaded
+    ? resolveStartView(startView, null, scopes).setting
+    : null;
   // 范围状态/数量轮询刷新，扫描完成后列表自动更新
   useEffect(() => {
     const t = window.setInterval(() => {
@@ -269,62 +274,73 @@ export default function IndexPage({ notice }: PageCtx) {
         <div className="card-head">
           <h3>启动列表</h3>
         </div>
-        <div className="toggle-row">
-          <div>
-            <b>打开 FindFlow 时显示</b>
-            <p className="muted">仅控制搜索框为空时的列表；输入关键词后始终搜索全部索引位置</p>
-          </div>
-          <div className="segmented">
-            <button
-              className={startView.mode === "index" ? "active" : ""}
-              onClick={() =>
-                void saveStartView(
-                  resolveStartView({ mode: "index", scopeId: startView.scopeId }, null, scopes)
-                    .setting,
-                )
-              }
-            >
-              索引内容
-            </button>
-            <button
-              className={startView.mode === "large" ? "active" : ""}
-              onClick={() => void saveStartView({ mode: "large", scopeId: null })}
-            >
-              大文件
-            </button>
-          </div>
-        </div>
-        {startView.mode === "index" ? (
-          <div className="toggle-row">
-            <div>
-              <b>默认索引位置</b>
-              <p className="muted">空搜索时列出该位置下的全部索引内容，并按名称排序</p>
+        {resolvedStartView ? (
+          <>
+            <div className="toggle-row">
+              <div>
+                <b>打开 FindFlow 时显示</b>
+                <p className="muted">仅控制搜索框为空时的列表；输入关键词后始终搜索全部索引位置</p>
+              </div>
+              <div className="segmented">
+                <button
+                  className={resolvedStartView.mode === "index" ? "active" : ""}
+                  onClick={() =>
+                    void saveStartView(
+                      resolveStartView({ mode: "index", scopeId: resolvedStartView.scopeId }, null, scopes)
+                        .setting,
+                    )
+                  }
+                >
+                  索引内容
+                </button>
+                <button
+                  className={resolvedStartView.mode === "large" ? "active" : ""}
+                  onClick={() => void saveStartView({ mode: "large", scopeId: null })}
+                >
+                  大文件
+                </button>
+              </div>
             </div>
-            <select
-              value={startView.scopeId ?? ""}
-              onChange={(event) =>
-                void saveStartView({
-                  mode: "index",
-                  scopeId: Number(event.target.value),
-                })
-              }
-              disabled={enabledScopes.length === 0}
-            >
-              {enabledScopes.length === 0 ? <option value="">暂无启用的索引位置</option> : null}
-              {enabledScopes.map((scope) => (
-                <option key={scope.scopeId} value={scope.scopeId}>
-                  {scope.path}
-                </option>
-              ))}
-            </select>
-          </div>
+            {resolvedStartView.mode === "index" ? (
+              <div className="toggle-row">
+                <div>
+                  <b>默认索引位置</b>
+                  <p className="muted">空搜索时列出该位置下的全部索引内容，并按名称排序</p>
+                </div>
+                <select
+                  value={resolvedStartView.scopeId ?? ""}
+                  onChange={(event) =>
+                    void saveStartView({
+                      mode: "index",
+                      scopeId: Number(event.target.value),
+                    })
+                  }
+                  disabled={enabledScopes.length === 0}
+                >
+                  {enabledScopes.length === 0 ? <option value="">暂无启用的索引位置</option> : null}
+                  {enabledScopes.map((scope) => (
+                    <option key={scope.scopeId} value={scope.scopeId}>
+                      {scope.path}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="toggle-row">
+                <div>
+                  <b>大文件范围</b>
+                  <p className="muted">跨全部索引位置，并按文件大小降序显示</p>
+                </div>
+                <span className="toggle-on">全部位置</span>
+              </div>
+            )}
+          </>
         ) : (
           <div className="toggle-row">
             <div>
-              <b>大文件范围</b>
-              <p className="muted">跨全部索引位置，并按文件大小降序显示</p>
+              <b>打开 FindFlow 时显示</b>
+              <p className="muted">正在读取启动列表设置…</p>
             </div>
-            <span className="toggle-on">全部位置</span>
           </div>
         )}
       </section>
