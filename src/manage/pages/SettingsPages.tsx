@@ -7,8 +7,6 @@ import {
   llmHasKey,
   llmSetKey,
   llmClearKey,
-  updaterCheck,
-  updaterInstall,
   hotkeyApply,
 } from "../../api";
 import { getThemePref, setThemePref, type ThemePref } from "../../theme";
@@ -224,9 +222,7 @@ export function PrivacyPage({ notice }: PageCtx) {
   );
 }
 
-export function UpdatePage({ notice }: PageCtx) {
-  const [status, setStatus] = useState<string>("点击检查更新");
-  const [busy, setBusy] = useState(false);
+export function UpdatePage({ notice: _notice }: PageCtx) {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
@@ -236,45 +232,16 @@ export function UpdatePage({ notice }: PageCtx) {
       .catch(() => undefined);
   }, []);
 
-  const check = () => {
-    setBusy(true);
-    updaterCheck()
-      .then((r) =>
-        setStatus(
-          r.available ? `发现新版本 v${r.version}，可下载安装` : "当前已是最新版本"
-        )
-      )
-      .catch((e) => setStatus(String(e)))
-      .finally(() => setBusy(false));
-  };
-
   return (
     <div className="page">
       <h2>更新</h2>
-      <p className="page-desc">检查并安装 FindFlow 的新版本。</p>
+      <p className="page-desc">查看 FindFlow 的版本信息。</p>
       <section className="card">
         <div className="toggle-row">
           <div>
             <b>当前版本</b>
-            <p className="muted">{version ? `v${version}` : "读取中…"} · 更新包经 minisign 签名校验，迁移失败自动回滚</p>
+            <p className="muted">{version ? `v${version}` : "读取中…"}</p>
           </div>
-        </div>
-        <div className="trial-actions">
-          <span>{status}</span>
-          <button disabled={busy} onClick={check}>
-            {busy ? "检查中…" : "检查更新"}
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={busy}
-            onClick={() =>
-              updaterInstall()
-                .then(() => notice("更新完成，应用将重启"))
-                .catch((e) => notice(String(e)))
-            }
-          >
-            下载并安装更新
-          </button>
         </div>
       </section>
     </div>
