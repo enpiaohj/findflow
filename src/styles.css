@@ -538,12 +538,6 @@ textarea {
   min-width: 40px;
 }
 
-.result-status {
-  margin: 0 18px 4px;
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-}
-
 /* ---------- 结果列表 ---------- */
 
 .result-list,
@@ -951,6 +945,13 @@ textarea {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.footerbar-status {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .footerbar-hints i {

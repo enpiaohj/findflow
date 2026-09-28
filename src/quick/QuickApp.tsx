@@ -525,9 +525,6 @@ export default function QuickApp() {
             count={items.length}
             limited={items.length >= 200}
           />
-          <div className="result-status">
-            {`索引 ${total.toLocaleString()} 条 · 用时 ${elapsed} ms`}
-          </div>
           <ResultList
             items={items}
             density={density}
@@ -543,7 +540,7 @@ export default function QuickApp() {
             onOpenSettings={() => setSettingsOpen(true)}
             emptyReason={browseNoScope ? "no-scope" : undefined}
           />
-          <FooterBar />
+          <FooterBar total={total} elapsed={elapsed} />
         </>
       )}
       {menuFor ? (
