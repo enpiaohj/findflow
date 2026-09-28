@@ -351,6 +351,30 @@ textarea {
   color: var(--text-primary);
 }
 
+.searchbar-clear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.searchbar-clear:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.searchbar-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .searchbar-input::placeholder {
   color: var(--text-tertiary);
 }

@@ -5,7 +5,7 @@ import TitleBar from "../components/TitleBar";
 import ResultList from "../components/ResultList";
 import FooterBar from "../components/FooterBar";
 import { Toast } from "../components/Toast";
-import { ArrowLeftIcon, SearchIcon } from "../components/Icons";
+import { ArrowLeftIcon, CloseIcon, SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
@@ -473,6 +473,21 @@ export default function QuickApp() {
               }}
               autoFocus
             />
+            {query ? (
+              <button
+                type="button"
+                className="searchbar-clear"
+                aria-label="清除搜索词"
+                title="清除搜索词"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setQuery("");
+                  inputRef.current?.focus();
+                }}
+              >
+                <CloseIcon size={14} />
+              </button>
+            ) : null}
             {historyOpen && !hasQuery && historyEnabled ? (
               <SearchHistory
                 items={history}
