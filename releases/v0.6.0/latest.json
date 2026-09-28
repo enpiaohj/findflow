@@ -1,0 +1,11 @@
+{
+  "version": "0.6.0",
+  "notes": "FindFlow v0.6.0：设置页按功能分类重组，新增系统托盘（可隐藏）与退出入口、开机自启、搜索历史与空搜索隐藏结果设置；修复索引内容空搜索层级与设置页闪现。",
+  "pub_date": "2026-09-28T14:40:06Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ21XdEV6cnZYMjRkMmpCUk1ZcXdlTVZKYTcrbmlid1ZiS210NUNUOWVSUGdGTGxlc1VncHcwb0lvelBuUDlUam1SbkkvM2RncC90ci92bkh3c3JScGdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjA1OTcwCWZpbGU6RmluZEZsb3dfMC42LjBfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNi4wCkFuQ0xVS0E5Z2pBVUp5OWxKc0Q2ZXdFQjJ6bm1xQm9mU1F5emt3YUlwM1AyV3grOHVYanBjNGsrWXcwUFBsS1JpVXZreW5nN1NLYzJOTE5iQThvQkRnPT0K",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.6.0/FindFlow-v0.6.0-win-x64-setup.exe"
+    }
+  }
+}
