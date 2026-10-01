@@ -120,7 +120,7 @@ fn flush(state: &Arc<crate::AppState>, pending: &mut Vec<String>) {
     if pending.is_empty() {
         return;
     }
-    let mut drained: Vec<String> = pending.drain(..).collect();
+    let mut drained: Vec<String> = std::mem::take(pending);
     // 同一窗口内同一路径的多次事件只处理一次（最终以磁盘当前状态为准）
     drained.sort_unstable();
     drained.dedup();

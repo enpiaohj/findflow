@@ -144,7 +144,7 @@ impl SearchIndex {
             d.add_text(self.name_tri, w.iter().collect::<String>());
         }
         // 仅含 CJK 的名称才需要拼音（纯 ASCII 名称拼音与原名等价，跳过省一半开销）
-        if name.chars().any(|c| !c.is_ascii()) {
+        if !name.is_ascii() {
             d.add_text(self.py_ngram, crate::util::pinyin_full(name));
             d.add_text(self.pya_ngram, crate::util::pinyin_abbr(name));
         }
@@ -243,7 +243,7 @@ impl SearchIndex {
                     }
                 }
             }
-            if len >= 2 && len <= 8 && t.is_ascii() {
+            if (2..=8).contains(&len) && t.is_ascii() {
                 shoulds.push((Occur::Should, term(self.pya_ngram, t, 0.35)));
                 shoulds.push((Occur::Should, term(self.py_ngram, t, 0.35)));
             }

@@ -198,7 +198,8 @@ fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
     let dropfiles_size = 20usize; // DROPFILES = offset(4) + pt(8) + fNC(2) + fWide(2) + padding
     let total = dropfiles_size + files_w.len() * 2;
     #[repr(C)]
-    struct DROPFILES {
+    #[allow(non_camel_case_types)]
+    struct DropFiles {
         pfiles: u32,
         pt_x: i32,
         pt_y: i32,
@@ -206,7 +207,7 @@ fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
         fwide: i32,
     }
     let mut payload = vec![0u8; total];
-    let df = DROPFILES {
+    let df = DropFiles {
         pfiles: dropfiles_size as u32,
         pt_x: 0,
         pt_y: 0,

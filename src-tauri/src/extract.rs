@@ -7,6 +7,9 @@ use crate::util;
 
 const MAX_CONTENT_FILE: i64 = 50 * 1024 * 1024; // 单文件正文上限 50MB（FR06）
 
+/// 待提取文件行：(file_id, path, ext, size, modified_ms)。
+type FulltextFile = (i64, String, String, i64, i64);
+
 fn supported_ext(ext: &str) -> Option<&'static str> {
     Some(match ext {
         "txt" | "md" | "json" | "xml" | "csv" | "log" | "html" | "htm" => "text",
@@ -26,7 +29,7 @@ pub fn run_fulltext(
     db: std::sync::Arc<crate::settings::DbHandle>,
     scope_only: Option<i64>,
 ) {
-    let files: Result<Vec<(i64, String, String, i64, i64)>, String> = db.with_conn(|c| {
+    let files: Result<Vec<FulltextFile>, String> = db.with_conn(|c| {
         let sql = "SELECT file_id, path, ext, size, modified_ms FROM files
              WHERE is_dir=0 AND (?1 IS NULL OR scope_id = ?1)
              AND fulltext_state IN ('none','pending','failed') LIMIT 20000";
@@ -36,7 +39,7 @@ pub fn run_fulltext(
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })
             .map_err(|e| e.to_string())?;
-        let all: Vec<(i64, String, String, i64, i64)> = rows.filter_map(|x| x.ok()).collect();
+        let all: Vec<FulltextFile> = rows.filter_map(|x| x.ok()).collect();
         Ok::<_, String>(all)
     });
     let files = match files {
@@ -193,15 +196,12 @@ pub fn extract_text(p: &Path, extractor: &str) -> Result<String, String> {
 fn read_text_lossy(p: &Path) -> Result<String, String> {
     let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
     // 常见中文场景：UTF-8 失败时回退 GBK（encoding_rs）
-    match String::from_utf8(bytes.clone()) {
+    match String::from_utf8(bytes) {
         Ok(s) => Ok(s),
-        Err(_) => {
-            let (decoded, _, had_errors) = encoding_rs::GBK.decode(&bytes);
-            if had_errors {
-                Ok(decoded.to_string())
-            } else {
-                Ok(decoded.to_string())
-            }
+        Err(e) => {
+            let bytes = e.into_bytes();
+            let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
+            Ok(decoded.to_string())
         }
     }
 }

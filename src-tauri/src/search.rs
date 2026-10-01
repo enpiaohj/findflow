@@ -72,9 +72,7 @@ pub fn run(
         let mut where_parts: Vec<String> = vec!["1=1".into()];
         let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         if let Some(scored) = &candidate_scores {
-            where_parts.push(format!(
-                "f.file_id IN (SELECT fid FROM temp.cands)"
-            ));
+            where_parts.push("f.file_id IN (SELECT fid FROM temp.cands)".to_string());
             let _ = scored.len();
         }
         if let Some(sid) = scope_id {
@@ -114,15 +112,15 @@ pub fn run(
             }
         }
         for p in &ast.path_include {
-            where_parts.push(format!("f.path LIKE ?"));
+            where_parts.push("f.path LIKE ?".to_string());
             bind.push(Box::new(format!("%{}%", p)));
         }
         for p in &ast.path_exclude {
-            where_parts.push(format!("f.path NOT LIKE ?"));
+            where_parts.push("f.path NOT LIKE ?".to_string());
             bind.push(Box::new(format!("%{}%", p)));
         }
         for t in &ast.text_exclude {
-            where_parts.push(format!("f.name NOT LIKE ? AND f.ext <> ?"));
+            where_parts.push("f.name NOT LIKE ? AND f.ext <> ?".to_string());
             bind.push(Box::new(format!("%{}%", t)));
             bind.push(Box::new(t.clone()));
         }

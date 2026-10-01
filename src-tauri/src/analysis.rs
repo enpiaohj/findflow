@@ -165,7 +165,7 @@ pub fn run_duplicates(
         }
         ctx.progress(0.95, "汇总重复组");
     }
-    full_groups.sort_by(|a, b| b.wasted.cmp(&a.wasted));
+    full_groups.sort_by_key(|g| std::cmp::Reverse(g.wasted));
     let result = serde_json::json!({
         "groups": full_groups,
         "skippedUnreadable": skipped_unreadable,

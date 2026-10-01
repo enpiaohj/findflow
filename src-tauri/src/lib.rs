@@ -131,7 +131,6 @@ pub fn run() {
                 }
                 Err(_) => default_dir.clone(),
             };
-            let data_dir = data_dir;
             logger::init(&data_dir);
             // 扫描与监听跳过自身数据目录，防止范围包含数据目录时自我触发
             util::set_app_data_dir(&data_dir);

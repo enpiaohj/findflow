@@ -76,7 +76,7 @@ fn stat_with_meta(
         native_file_id: native_id,
         parent_path: path
             .parent()
-            .map(|p| util::normalize_path(p))
+            .map(util::normalize_path)
             .unwrap_or_default(),
     })
 }
@@ -624,7 +624,7 @@ fn recalibrate_scope(
             fixed.push(u);
         }
         changed += fixed.len() as u64;
-        let _ = db.with_conn(|c| {
+        db.with_conn(|c| {
             c.execute("BEGIN IMMEDIATE", []).ok();
             let _ = upsert_batch(c, &fixed);
             c.execute("COMMIT", []).ok();

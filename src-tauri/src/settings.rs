@@ -98,6 +98,13 @@ pub async fn delete_setting(
     store.db.delete(&key).map_err(|e| e.to_string())
 }
 
+/// 供 hotkey 模块持久化新快捷键到 settings 表。
+pub fn persist_hotkey(app: &tauri::AppHandle, hotkey: &str) {
+    use tauri::Manager;
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
+    let _ = state.db.set("ui.hotkey", &serde_json::json!(hotkey));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,12 +148,4 @@ mod tests {
         assert!(!s.delete("ui.density").unwrap());
         assert_eq!(s.get("ui.density").unwrap(), None);
     }
-}
-
-/// 供 hotkey 模块持久化新快捷键到 settings 表。
-pub fn persist_hotkey(app: &tauri::AppHandle, hotkey: &str) {
-    use tauri::Manager;
-    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
-    let _ = state.db.set("ui.hotkey", &serde_json::json!(hotkey));
-    let _ = state.db.set("ui.hotkeyActive", &serde_json::json!(hotkey));
 }
