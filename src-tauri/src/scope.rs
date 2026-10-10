@@ -184,6 +184,7 @@ pub async fn scope_remove(
         c.execute("UPDATE scopes SET enabled=0, state='offline' WHERE scope_id=?1", [scope_id]).map_err(|e| e.to_string())?;
         Ok(())
     })?;
+    crate::search::invalidate_total_cache();
     store.unwatch_scope(scope_id);
     if delete_index {
         // 百万级行的删除放到后台分块执行（同步删除索引文档），界面立即返回
@@ -217,6 +218,7 @@ pub async fn scope_set_enabled(
                 .map_err(|e| e.to_string())?;
             Ok::<(), String>(())
         })?;
+    crate::search::invalidate_total_cache();
     if !enabled {
         store.unwatch_scope(scope_id);
     } else {
@@ -225,6 +227,10 @@ pub async fn scope_set_enabled(
         });
         if let Ok(p) = path {
             let _ = store.watch_scope(scope_id, &p);
+        }
+        // 关闭期间没有监听，磁盘上的变化要补一次校准才会反映到索引里
+        if let Err(e) = crate::scanner::start_recalibrate_job(&store, Some(scope_id)) {
+            tracing::warn!("重新启用范围后校准失败: {e}");
         }
     }
     Ok(())

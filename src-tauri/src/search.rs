@@ -98,6 +98,10 @@ pub fn run(
             where_parts.push("f.file_id IN (SELECT fid FROM temp.cands)".to_string());
             let _ = scored.len();
         }
+        // 已关闭的索引范围不参与搜索（开关只控制监听与扫描是不够的，用户期望关闭即不再命中）
+        if has_disabled_scope(c) {
+            where_parts.push("f.scope_id IN (SELECT scope_id FROM scopes WHERE enabled=1)".into());
+        }
         if let Some(sid) = scope_id {
             if sid > 0 {
                 // 走 idx_files_scope 索引
@@ -358,6 +362,8 @@ pub fn run(
 /// 索引总数缓存条目：数据库身份、位置、写入时刻、计数。
 type TotalCacheEntry = (usize, Option<i64>, Instant, i64);
 
+static TOTAL: std::sync::Mutex<Option<TotalCacheEntry>> = std::sync::Mutex::new(None);
+
 /// 索引总数（UI 显示“共 N 项”）：百万级 COUNT(*) 需数十毫秒，每次按键都算会拖慢输入，
 /// 缓存 10 秒即可满足显示需要。缓存键含数据库身份与位置：切换位置、切换数据库或超时才重算。
 /// 指定位置时与空搜索浏览一致，只统计该位置根目录第一层。
@@ -365,7 +371,6 @@ fn cached_total(
     store: &crate::settings::SettingsStore,
     scope_id: Option<i64>,
 ) -> Result<i64, String> {
-    static TOTAL: std::sync::Mutex<Option<TotalCacheEntry>> = std::sync::Mutex::new(None);
     // 缓存是进程级静态量，必须以数据库身份区分：否则不同库（如并行测试的内存库）
     // 会互相命中对方的计数。
     let db_id = store.id();
@@ -389,6 +394,12 @@ fn cached_total(
                 ),
                 None => Ok(0),
             }
+        } else if has_disabled_scope(c) {
+            c.query_row(
+                "SELECT COUNT(*) FROM files WHERE scope_id IN (SELECT scope_id FROM scopes WHERE enabled=1)",
+                [],
+                |r| r.get(0),
+            )
         } else {
             c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
         }
@@ -396,6 +407,18 @@ fn cached_total(
     })?;
     *cache = Some((db_id, scope_id, Instant::now(), n));
     Ok(n)
+}
+
+/// 是否存在已关闭的索引范围。
+fn has_disabled_scope(c: &rusqlite::Connection) -> bool {
+    c.query_row("SELECT EXISTS(SELECT 1 FROM scopes WHERE enabled=0)", [], |r| r.get::<_, i64>(0))
+        .map(|v| v != 0)
+        .unwrap_or(false)
+}
+
+/// 索引范围开关 / 增删后让总数缓存失效，否则最多 10 秒内仍显示旧数字。
+pub fn invalidate_total_cache() {
+    *TOTAL.lock().unwrap() = None;
 }
 
 fn recency_score(store: &crate::settings::SettingsStore, path: &str) -> f64 {
@@ -461,6 +484,50 @@ pub async fn cmd_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 已关闭的索引范围不参与搜索与计数；重新启用后恢复。
+    #[test]
+    fn disabled_scope_is_excluded_from_results_and_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
+                [],
+            )
+            .unwrap();
+            for (sid, name, parent) in [(1, "alpha.txt", "D:/a"), (2, "beta.txt", "D:/b")] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (?1, ?2, ?3, 'doc', 1, ?4)",
+                    rusqlite::params![sid, name, format!("{parent}\\{name}"), parent],
+                )
+                .unwrap();
+            }
+        });
+        let ast = QueryAst::default();
+        let names = |o: &SearchOutcome| {
+            let mut v: Vec<String> = o.items.iter().map(|i| i.name.clone()).collect();
+            v.sort();
+            v
+        };
+        invalidate_total_cache();
+        let all = run(&store, &index, &ast, 10, None).unwrap();
+        assert_eq!(names(&all), vec!["alpha.txt", "beta.txt"]);
+        assert_eq!(all.total, 2);
+
+        store.with_conn(|c| c.execute("UPDATE scopes SET enabled=0 WHERE scope_id=2", []).unwrap());
+        invalidate_total_cache();
+        let off = run(&store, &index, &ast, 10, None).unwrap();
+        assert_eq!(names(&off), vec!["alpha.txt"]);
+        assert_eq!(off.total, 1);
+
+        store.with_conn(|c| c.execute("UPDATE scopes SET enabled=1 WHERE scope_id=2", []).unwrap());
+        invalidate_total_cache();
+        let on = run(&store, &index, &ast, 10, None).unwrap();
+        assert_eq!(names(&on), vec!["alpha.txt", "beta.txt"]);
+    }
 
     /// 空搜索浏览：scope_id 限定范围且仅列根目录第一层，名称与大小排序保持稳定。
     #[test]
