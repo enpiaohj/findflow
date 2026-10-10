@@ -9,7 +9,10 @@ import { ArrowLeftIcon, ChevronDownIcon, CloseIcon, SearchIcon } from "../compon
 import PreviewOverlay from "./PreviewOverlay";
 import PreviewPane from "./PreviewPane";
 import ResultMenu from "./ResultMenu";
-import FilterBar, { type FilterId } from "../components/FilterBar";
+import FilterBar, { FILTERS, type FilterId } from "../components/FilterBar";
+import MenuBar, { type MenuDef } from "../components/MenuBar";
+import { useConfirm } from "../components/ConfirmDialog";
+import { recycleItem } from "./itemActions";
 import ManageBody from "../manage/ManageBody";
 import {
   search as apiSearch,
@@ -19,6 +22,8 @@ import {
   actionLocate,
   actionCopyPath,
   actionCopyFiles,
+  appExit,
+  favoriteToggle,
   scanStatus,
   scopesList,
   type FileRow,
@@ -30,7 +35,7 @@ import {
   recordSearch,
   removeSearch,
 } from "../searchHistory";
-import IdleHint from "./IdleHint";
+import IdleHint, { TIPS } from "./IdleHint";
 import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import { clampPaneWidth, DEFAULT_PANE_WIDTH } from "../layout";
@@ -96,6 +101,10 @@ export default function QuickApp() {
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<string | undefined>(undefined);
+  const [menubarOpen, setMenubarOpen] = useState(false);
+  const [renameFor, setRenameFor] = useState<FileRow | null>(null);
+  const { confirm, confirmEl } = useConfirm();
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [clearOnHide, setClearOnHide] = useState(false);
   const [startView, setStartViewState] = useState<StartViewSetting>({
@@ -452,8 +461,11 @@ export default function QuickApp() {
         if (event.key === "Escape") setSettingsOpen(false);
         return;
       }
-      if (menuFor) {
-        if (event.key === "Escape") setMenuFor(null);
+      if (menuFor || renameFor || menubarOpen) {
+        if (event.key === "Escape" && !menubarOpen) {
+          setMenuFor(null);
+          setRenameFor(null);
+        }
         return;
       }
       if (previewOpen) {
@@ -549,12 +561,281 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, settingsOpen, notice, recordSearchTerm, togglePreviewPane]
+    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, renameFor, menubarOpen, settingsOpen, notice, recordSearchTerm, togglePreviewPane]
   );
+
+  const openSettings = (page?: string) => {
+    setSettingsPage(page);
+    setSettingsOpen(true);
+  };
+  const focusInput = () => inputRef.current?.focus();
+
+  // ---- 菜单栏：对「当前选中项」的操作与现有右键菜单 / 快捷键共用同一批动作 ----
+  const selected = browseHidden ? null : items[selectedIndex] ?? null;
+  const noSel = selected === null;
+  const noteResult = (p: Promise<string>) => p.then((m) => notice(m)).catch((e) => notice(String(e)));
+  const menus: MenuDef[] = [
+    {
+      id: "file",
+      label: "文件(F)",
+      accel: "f",
+      entries: [
+        {
+          kind: "item",
+          label: "打开",
+          hint: "Enter",
+          disabled: noSel,
+          onSelect: () => {
+            if (!selected) return;
+            void getCurrentWindow().hide();
+            noteResult(actionOpen(selected.path));
+          },
+        },
+        {
+          kind: "item",
+          label: "在文件夹中定位",
+          hint: "Ctrl+Enter",
+          disabled: noSel,
+          onSelect: () => selected && noteResult(actionLocate(selected.path)),
+        },
+        { kind: "sep" },
+        {
+          kind: "item",
+          label: "复制完整路径",
+          hint: "Ctrl+C",
+          disabled: noSel,
+          onSelect: () => selected && noteResult(actionCopyPath(selected.path, "full")),
+        },
+        {
+          kind: "item",
+          label: selected?.isDir ? "复制文件夹" : "复制文件",
+          hint: "Ctrl+Shift+C",
+          disabled: noSel,
+          onSelect: () => selected && noteResult(actionCopyFiles([selected.path])),
+        },
+        { kind: "sep" },
+        { kind: "item", label: "重命名…", disabled: noSel, onSelect: () => selected && setRenameFor(selected) },
+        {
+          kind: "item",
+          label: selected?.favorite ? "取消收藏" : "收藏",
+          disabled: noSel,
+          onSelect: () => {
+            if (!selected) return;
+            favoriteToggle(selected.fileId)
+              .then(() => {
+                notice(selected.favorite ? "已取消收藏" : "已收藏");
+                runSearch();
+              })
+              .catch((e) => notice(String(e)));
+          },
+        },
+        {
+          kind: "item",
+          label: "移至回收站",
+          danger: true,
+          disabled: noSel,
+          onSelect: () => {
+            if (!selected) return;
+            recycleItem(selected, confirm)
+              .then((m) => {
+                if (m === null) return;
+                notice(m);
+                runSearch();
+              })
+              .catch((e) => notice(String(e)));
+          },
+        },
+        { kind: "sep" },
+        { kind: "item", label: "隐藏窗口", hint: "Esc", onSelect: () => void getCurrentWindow().hide() },
+        { kind: "item", label: "退出 FindFlow", onSelect: () => appExit().catch((e) => notice(String(e))) },
+      ],
+    },
+    {
+      id: "edit",
+      label: "编辑(E)",
+      accel: "e",
+      entries: [
+        { kind: "title", label: "搜索框" },
+        {
+          kind: "item",
+          label: "剪切",
+          hint: "Ctrl+X",
+          onSelect: () => {
+            focusInput();
+            document.execCommand("cut");
+          },
+        },
+        {
+          kind: "item",
+          label: "复制",
+          hint: "Ctrl+C",
+          onSelect: () => {
+            focusInput();
+            document.execCommand("copy");
+          },
+        },
+        {
+          kind: "item",
+          label: "粘贴",
+          hint: "Ctrl+V",
+          onSelect: () => {
+            navigator.clipboard
+              .readText()
+              .then((text) => {
+                const el = inputRef.current;
+                if (!el) return;
+                el.focus();
+                el.setRangeText(text, el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length, "end");
+                setQuery(el.value);
+              })
+              .catch(() => notice("无法读取剪贴板"));
+          },
+        },
+        {
+          kind: "item",
+          label: "全选",
+          hint: "Ctrl+A",
+          onSelect: () => {
+            focusInput();
+            inputRef.current?.select();
+          },
+        },
+        { kind: "sep" },
+        {
+          kind: "item",
+          label: "清空搜索框",
+          hint: "Esc",
+          disabled: !query,
+          onSelect: () => {
+            setQuery("");
+            focusInput();
+          },
+        },
+        { kind: "item", label: "聚焦搜索框", hint: "Ctrl+L", onSelect: () => { focusInput(); inputRef.current?.select(); } },
+      ],
+    },
+    {
+      id: "view",
+      label: "视图(V)",
+      accel: "v",
+      entries: [
+        {
+          kind: "item",
+          label: "预览窗格",
+          hint: "Alt+P",
+          checked: previewPane,
+          onSelect: () => {
+            togglePreviewPane();
+            focusInput();
+          },
+        },
+        {
+          kind: "item",
+          label: "预览所选文件",
+          hint: "Space",
+          disabled: noSel,
+          onSelect: () => selected && setPreviewOpen(true),
+        },
+        { kind: "sep" },
+        { kind: "title", label: "显示密度" },
+        ...(["compact", "comfortable", "large"] as Density[]).map((d) => ({
+          kind: "item" as const,
+          label: d === "compact" ? "紧凑" : d === "comfortable" ? "舒适" : "大图标",
+          checked: density === d,
+          onSelect: () => {
+            changeDensity(d);
+            focusInput();
+          },
+        })),
+        { kind: "sep" },
+        { kind: "title", label: "排序方式" },
+        ...visibleSorts.map((option) => ({
+          kind: "item" as const,
+          label: option.label,
+          checked: activeSort === option.id,
+          onSelect: () => {
+            changeSort(option.id);
+            focusInput();
+          },
+        })),
+      ],
+    },
+    {
+      id: "search",
+      label: "搜索(S)",
+      accel: "s",
+      entries: [
+        { kind: "title", label: "类型筛选" },
+        ...FILTERS.map((f) => ({
+          kind: "item" as const,
+          label: f.label,
+          checked: filter === f.id,
+          onSelect: () => {
+            setFilter(f.id);
+            focusInput();
+          },
+        })),
+        { kind: "sep" },
+        { kind: "title", label: "语法示例（填入搜索框）" },
+        ...TIPS.map((tip) => ({
+          kind: "item" as const,
+          label: tip.query,
+          hint: tip.desc,
+          onSelect: () => {
+            setQuery(tip.query);
+            focusInput();
+          },
+        })),
+        { kind: "sep" },
+        {
+          kind: "item",
+          label: "搜索历史",
+          disabled: !historyEnabled || history.length === 0,
+          onSelect: () => {
+            focusInput();
+            setHistoryOpen(true);
+          },
+        },
+        {
+          kind: "item",
+          label: "清空搜索历史",
+          disabled: history.length === 0,
+          onSelect: () => {
+            clearHistory();
+            focusInput();
+          },
+        },
+      ],
+    },
+    {
+      id: "tools",
+      label: "工具(T)",
+      accel: "t",
+      entries: [
+        { kind: "item", label: "设置…", onSelect: () => openSettings() },
+        { kind: "sep" },
+        { kind: "item", label: "索引范围…", onSelect: () => openSettings("index") },
+        { kind: "item", label: "任务…", onSelect: () => openSettings("tasks") },
+        { kind: "item", label: "批量处理…", onSelect: () => openSettings("batch") },
+        { kind: "item", label: "空间分析…", onSelect: () => openSettings("space") },
+        { kind: "item", label: "收藏与标签…", onSelect: () => openSettings("library") },
+      ],
+    },
+    {
+      id: "help",
+      label: "帮助(H)",
+      accel: "h",
+      entries: [
+        { kind: "item", label: "快捷键…", onSelect: () => openSettings("hotkey") },
+        { kind: "item", label: "关于 FindFlow", onSelect: () => openSettings("about") },
+      ],
+    },
+  ];
 
   return (
     <div className="app" onKeyDown={onKeyDown}>
-      <TitleBar onOpenSettings={() => setSettingsOpen(true)} />
+      {confirmEl}
+      <TitleBar onOpenSettings={() => openSettings()} />
       {settingsOpen ? (
         <>
           <div className="settings-top">
@@ -564,10 +845,11 @@ export default function QuickApp() {
               <kbd>Esc</kbd>
             </button>
           </div>
-          <ManageBody notice={notice} />
+          <ManageBody notice={notice} initialPage={settingsPage} key={settingsPage ?? "default"} />
         </>
       ) : (
         <>
+          <MenuBar menus={menus} onRestoreFocus={focusInput} onOpenChange={setMenubarOpen} />
           <div className="searchbar">
             <span className="searchbar-icon">
               <SearchIcon />
@@ -721,6 +1003,15 @@ export default function QuickApp() {
           item={menuFor}
           pos={menuPos}
           onClose={() => setMenuFor(null)}
+          onNotice={notice}
+          onRefresh={runSearch}
+        />
+      ) : null}
+      {renameFor ? (
+        <ResultMenu
+          item={renameFor}
+          initial="rename"
+          onClose={() => setRenameFor(null)}
           onNotice={notice}
           onRefresh={runSearch}
         />

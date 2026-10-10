@@ -1,6 +1,6 @@
 /** 空搜索且隐藏结果列表时的引导：给出几个可点击的搜索写法，避免中间大片空白。 */
 
-const TIPS: { query: string; desc: string }[] = [
+export const TIPS: { query: string; desc: string }[] = [
   { query: "报告 年度", desc: "多个词需同时命中" },
   { query: "*.pdf", desc: "通配符：所有 PDF" },
   { query: "ext:docx", desc: "按扩展名" },

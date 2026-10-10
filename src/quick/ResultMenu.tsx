@@ -10,13 +10,12 @@ import {
   actionOpenTerminal,
   actionOpenVscode,
   actionRename,
-  issueDeleteToken,
-  actionRecycle,
   favoriteToggle,
   type FileRow,
 } from "../api";
 import { useConfirm } from "../components/ConfirmDialog";
 import { clampOverlayPos } from "../layout";
+import { recycleItem } from "./itemActions";
 
 interface Props {
   item: FileRow | null;
@@ -24,10 +23,12 @@ interface Props {
   onClose: () => void;
   onNotice: (message: string) => void;
   onRefresh: () => void;
+  /** 由菜单栏触发时直接进入重命名 */
+  initial?: "rename";
 }
 
-export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: Props) {
-  const [renaming, setRenaming] = useState(false);
+export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh, initial }: Props) {
+  const [renaming, setRenaming] = useState(initial === "rename");
   const [newName, setNewName] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuSize, setMenuSize] = useState<{ width: number; height: number } | null>(null);
@@ -92,12 +93,10 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
     );
 
   const doRecycle = async () => {
-    if (!(await confirm(`将「${item.name}」移至回收站？`, "可在系统回收站中还原。"))) return;
     try {
-      const token = await issueDeleteToken([{ fileId: item.fileId, path }]);
-      const results = await actionRecycle([{ fileId: item.fileId, path }], token);
-      const failed = results.filter((r) => r.status !== "ok");
-      onNotice(failed.length === 0 ? "已移至回收站" : failed[0].reason || "操作失败");
+      const message = await recycleItem(item, confirm);
+      if (message === null) return;
+      onNotice(message);
       onRefresh();
       onClose();
     } catch (e) {
