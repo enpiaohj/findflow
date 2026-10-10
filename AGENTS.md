@@ -1,39 +1,11 @@
-# FindFlow 项目规则
+# FindFlow 项目规则（供读取 AGENTS.md 的编码代理使用）
 
-> 本文件与 `CLAUDE.md` 内容保持一致，供读取 `AGENTS.md` 的编码代理使用；修改项目规则时请同步更新两份文件（或以 `CLAUDE.md` 为准并让本文件指向它）。
+**项目规则以 [`CLAUDE.md`](CLAUDE.md) 为唯一准绳，请先完整阅读它。** 本文件不再重复其内容（此前两份文件各自维护，本文件长期停留在 `0.2.0` 时的状态，造成误导），只列出最容易出错的几条：
 
-> 用户级全局规则（`~/.claude/rules/`）在本项目之上生效；本文件只定义项目专属规则。
-
-## Repository Rule
-
-- **产品名**：FindFlow
-- **仓库**：`findflow`（GitHub：`enpiaohj/findflow`，Private，默认分支 `main`）
-- **版本**：Semantic Versioning。当前 `0.2.0` 开发中。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；正式发布时递增 Build Number。
-- **Commit**：Conventional Commits（`feat:` / `fix:` / `docs:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
-- **发布产物**：安装包默认不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/` 与 `CHANGELOG.md` 入库，产物上传 GitHub Releases）。
-- **设计文档**：产品设计文档与 UI 概念图维护于工作区 `D:\AIProjects\ai-coding-workspace\projects\FindFlow\01-产品设计\`，不入本仓库。
-- **历史**：旧仓库（截至 `v0.1.0` 及其后 3 个提交）已于 2026-09-24 完整备份至 `D:\AIProjects\_Backup\2026-09-24-FindFlow-操作前备份-v1.0.bundle`，本仓库自零重建；未经用户明确授权不得覆盖远程历史。
-
-## 技术栈
-
-Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust + rusqlite（SQLite WAL，数据基座）；规划中：Tantivy 全文索引、jieba-rs 中文分词、BLAKE3 哈希、windows-rs（USN / Shell API）。
-
-## 常用命令
-
-| 用途 | 命令 |
-| --- | --- |
-| 安装前端依赖 | `npm install` |
-| 前端类型检查 + 构建 | `npm run build` |
-| 桌面开发运行 | `npm run tauri dev` |
-| 完整桌面打包 | `npm run tauri build` |
-| Rust 单元测试 | `cd src-tauri && cargo test` |
-| 生成全套应用图标（源文件 `src-tauri/icons/source/*.svg`，需本机 Chrome 或 Edge） | `node scripts/generate-app-icon.mjs` |
-| 性能基准 | `cd src-tauri && cargo run --release --bin bench_gen -- --count 1000000` |
-
-## 产品闭环底线（来自设计文档 §10.2，任何阶段不得违反）
-
-1. 删除默认进入 Windows 回收站；永久删除须二次确认且无全局快捷键。
-2. 批量操作必须先预演再执行，逐项结果（成功 / 跳过 / 失败）可追溯。
-3. 破坏性操作前用稳定 ID 与当前路径双重校验操作对象。
-4. 基础搜索离线完整可用，不依赖 AI 与网络。
-5. 禁止基于屏幕坐标的自动点击用于产品内部确认。
+1. **提交身份**：只使用 GitHub noreply 地址提交，任何地方不得出现真实邮箱。
+2. **Tag 与发布**：只推送新版本的 tag；本地保留的 `v0.2.0`–`v0.7.0` 旧 tag 不得推送，也不要重建它们的 Release。
+3. **可见性**：仓库为 Public。不得擅自修改可见性、覆盖远程历史或强制推送。
+4. **发布快照不可变**：`releases/vX.Y.Z/` 一经发布不得修改；发现问题发新版本。
+5. **产品闭环底线**（`CLAUDE.md`「产品闭环底线」一节）任何阶段不得违反：删除进回收站并需确认、批量操作先预演、破坏性操作前双重校验、基础搜索离线可用、不用屏幕坐标自动点击。
+6. **验证**：改动后至少运行 `npm run build`、`npm run test:unit`、`cd src-tauri && cargo test`、`cargo clippy --all-targets`（要求 0 警告）；未执行的验证如实说明。
+7. **语言**：回复、提交说明与新文档使用简体中文；代码标识符、命令、路径保持原样。

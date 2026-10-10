@@ -1,0 +1,11 @@
+{
+  "version": "0.8.1",
+  "notes": "FindFlow v0.8.1：类型筛选与通配符查询提速（上百毫秒降到个位数毫秒）；索引写入遇杀毒软件干扰后自动恢复；安装界面改为简体中文，卸载列表名称带版本号。",
+  "pub_date": "2026-10-10T15:30:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ3FuY3lJQnB0c25XTUR2ckUzc0tqVkRaU1dTYzJ5UnNkVThLV2tLS2tCeTlZVmpLSkNqZFVGYk1pelozdG10NjRnMFRZT3d1a3hKdm5vNW1PNitFaWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjQ1MDk1CWZpbGU6RmluZEZsb3ctdjAuOC4xLXdpbi14NjQtc2V0dXAuZXhlCitQYWVML1pRRjk4Z0c2UXNJVjZMY0pTbGx0cSt0VFkxUXFwdGhLbjRBSWNBWFZ4TGNQYWZCcStvN3dvV1JRalpENkY0MFpSdjNLWnIxY3dYazN5bkJBPT0K",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.8.1/FindFlow-v0.8.1-win-x64-setup.exe"
+    }
+  }
+}

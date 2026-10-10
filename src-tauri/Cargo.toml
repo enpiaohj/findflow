@@ -1,6 +1,6 @@
 [package]
 name = "findflow"
-version = "0.8.0"
+version = "0.8.1"
 license = "MIT"
 description = "FindFlow —— Windows 本地优先的极速文件搜索与轻量文件处理工具"
 edition = "2021"
