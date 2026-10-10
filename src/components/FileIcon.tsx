@@ -25,8 +25,8 @@ export function FallbackIcon({ kind, ext, isDir, size }: FallbackProps) {
   if (isDir || kind === "folder") {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-        <path d="M3 8.5C3 7.1 4.1 6 5.5 6h7l2.6 2.6H26.5c1.4 0 2.5 1.1 2.5 2.5v13.4c0 1.4-1.1 2.5-2.5 2.5h-21C4.1 27 3 25.9 3 24.5z" fill="#F2B84B" />
-        <path d="M3 12.5c0-1.4 1.1-2.5 2.5-2.5h21c1.4 0 2.5 1.1 2.5 2.5v12c0 1.4-1.1 2.5-2.5 2.5h-21C4.1 27 3 25.9 3 24.5z" fill="#FFD27A" />
+        <path d="M3 8.5C3 7.1 4.1 6 5.5 6h7l2.6 2.6H26.5c1.4 0 2.5 1.1 2.5 2.5v13.4c0 1.4-1.1 2.5-2.5 2.5h-21C4.1 27 3 25.9 3 24.5z" fill="#E3AE55" />
+        <path d="M3 12.5c0-1.4 1.1-2.5 2.5-2.5h21c1.4 0 2.5 1.1 2.5 2.5v12c0 1.4-1.1 2.5-2.5 2.5h-21C4.1 27 3 25.9 3 24.5z" fill="#F5D390" />
       </svg>
     );
   }
@@ -92,7 +92,11 @@ export function FileThumb({ path, ext, isDir, kind, modifiedMs, height }: ThumbP
   // 原图明显小于预览区（如图标、表情）时按原尺寸居中，避免放大裁切后发虚
   const [small, setSmall] = useState(false);
   return (
-    <div className={"result-thumb" + (thumb ? " has-image" : "")} style={{ height }}>
+    <div
+      className={"result-thumb" + (thumb ? " has-image" : "")}
+      data-kind={thumb ? undefined : isDir ? "folder" : kind}
+      style={{ height }}
+    >
       {thumb ? (
         <img
           className={"result-thumb-img" + (small ? " small" : "")}
@@ -106,7 +110,7 @@ export function FileThumb({ path, ext, isDir, kind, modifiedMs, height }: ThumbP
           }}
         />
       ) : (
-        <FileIcon path={path} ext={ext} isDir={isDir} kind={kind} size={64} />
+        <FileIcon path={path} ext={ext} isDir={isDir} kind={kind} size={72} />
       )}
       {thumb && kind === "video" ? <span className="thumb-play" aria-hidden="true" /> : null}
     </div>

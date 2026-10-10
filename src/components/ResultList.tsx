@@ -21,6 +21,8 @@ interface Props {
   emptyReason?: "no-scope" | "loading" | "filtered";
   /** 当前查询串，用于高亮名称中的命中词 */
   query?: string;
+  /** 新查询耗时较长时，旧结果保持原样并变淡，避免闪动 */
+  stale?: boolean;
 }
 
 /** 名称中的命中词高亮。 */
@@ -87,6 +89,7 @@ export default function ResultList({
   onOpenSettings,
   emptyReason,
   query = "",
+  stale = false,
 }: Props) {
   const terms = useMemo(() => queryTerms(query), [query]);
   const listRef = useRef<HTMLDivElement>(null);
@@ -188,7 +191,7 @@ export default function ResultList({
 
   if (density === "large") {
     return (
-      <div className="result-grid" ref={listRef}>
+      <div className={"result-grid" + (stale ? " is-stale" : "")} ref={listRef}>
         {items.map((item, index) => (
           <button
             key={item.fileId}
@@ -213,7 +216,9 @@ export default function ResultList({
               <Highlighted text={item.name} terms={terms} />
             </div>
             <div className="result-card-meta">
-              {item.isDir ? "文件夹" : formatBytes(item.size)} ｜ {formatTime(item.modifiedMs)}
+              {item.isDir ? "文件夹" : formatBytes(item.size)}
+              <i className="meta-sep" />
+              {formatTime(item.modifiedMs)}
             </div>
           </button>
         ))}
@@ -231,7 +236,7 @@ export default function ResultList({
   } as CSSProperties;
 
   return (
-    <div className="result-list" ref={listRef} style={colVars}>
+    <div className={"result-list" + (stale ? " is-stale" : "")} ref={listRef} style={colVars}>
       {!comfortable ? (
         <div className="result-header">
           {COLUMNS.map((c) => (

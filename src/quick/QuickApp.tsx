@@ -71,6 +71,7 @@ export default function QuickApp() {
   const [density, setDensity] = useState<Density>("compact");
   const [items, setItems] = useState<FileRow[]>([]);
   // 是否已收到过一次搜索结果：此前列表为空只是「还没查完」，不能显示「没有匹配的结果」
+  const [stale, setStale] = useState(false);
   const [searched, setSearched] = useState(false);
   const [total, setTotal] = useState(0);
   // 空搜索隐藏结果时状态栏显示的全库索引总数（未取到前为 null，不显示）
@@ -300,9 +301,15 @@ export default function QuickApp() {
     }
 
     const gen = ++searchGen.current;
+    // 查询超过 150ms 才让旧结果变淡：快速查询不闪烁
+    const staleTimer = window.setTimeout(() => {
+      if (gen === searchGen.current) setStale(true);
+    }, 150);
     apiSearch(q, activeSort === "relevance" ? undefined : activeSort, 200, scopeId)
       .then((response) => {
+        window.clearTimeout(staleTimer);
         if (gen !== searchGen.current) return;
+        setStale(false);
         setItems(response.items);
         setSearched(true);
         setMatched(response.matched);
@@ -310,7 +317,9 @@ export default function QuickApp() {
         setElapsed(response.elapsedMs);
       })
       .catch((error) => {
+        window.clearTimeout(staleTimer);
         if (gen !== searchGen.current) return;
+        setStale(false);
         notice("搜索失败：" + String(error));
       });
   }, [
@@ -605,6 +614,7 @@ export default function QuickApp() {
               }}
               onOpenSettings={() => setSettingsOpen(true)}
               query={query}
+              stale={stale}
               emptyReason={
                 browseNoScope ? "no-scope" : !searched ? "loading" : filter !== "all" ? "filtered" : undefined
               }

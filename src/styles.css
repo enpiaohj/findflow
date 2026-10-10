@@ -170,6 +170,16 @@ textarea {
   outline-offset: 1px;
 }
 
+/* 链接：走主题强调色，悬停才显示下划线（浏览器默认蓝在深色下很突兀） */
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
 .app {
   position: relative;
   height: 100vh;
@@ -778,6 +788,10 @@ body.col-resizing {
   background: var(--surface-2);
 }
 
+.row-compact.result-selected .result-name {
+  font-weight: 600;
+}
+
 .result-row.result-selected,
 .result-row.result-selected:hover {
   background: var(--accent-subtle);
@@ -1054,6 +1068,41 @@ body.col-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+
+/* 元信息之间的细竖线（代替全角「｜」，粗细与间距稳定） */
+.meta-sep {
+  display: inline-block;
+  width: 1px;
+  height: 11px;
+  margin: 0 8px;
+  vertical-align: -1px;
+  background: var(--border-strong);
+}
+
+/* 无缩略图时的占位底色：按文件大类带一点色相，比一整块灰更易区分 */
+.result-thumb[data-kind] {
+  background: color-mix(in srgb, var(--thumb-tint, var(--text-tertiary)) 9%, var(--surface-2));
+}
+
+.result-thumb[data-kind="doc"] { --thumb-tint: #2b6cd4; }
+.result-thumb[data-kind="sheet"] { --thumb-tint: #1f8a4c; }
+.result-thumb[data-kind="pdf"] { --thumb-tint: #d93025; }
+.result-thumb[data-kind="image"] { --thumb-tint: #0ea5e9; }
+.result-thumb[data-kind="video"] { --thumb-tint: #8b5cf6; }
+.result-thumb[data-kind="audio"] { --thumb-tint: #db2777; }
+.result-thumb[data-kind="archive"] { --thumb-tint: #b7791f; }
+.result-thumb[data-kind="folder"] { --thumb-tint: #e3ae55; }
+
+/* 新查询较慢时旧结果变淡（不清空，避免闪动） */
+.result-list,
+.result-grid {
+  transition: opacity var(--dur-base) var(--ease);
+}
+
+.result-list.is-stale,
+.result-grid.is-stale {
+  opacity: 0.55;
 }
 
 /* ---------- 空结果 ---------- */
@@ -1805,7 +1854,9 @@ button:disabled {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /* 过渡直接取消（0s）；动画保留极短时长，使 animationend 事件仍会触发 */
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
   }
 
   /* 不定进度条是「仍在工作」的反馈，保留动画 */

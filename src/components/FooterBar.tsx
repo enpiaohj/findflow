@@ -48,7 +48,9 @@ export default function FooterBar({ item, total, elapsed }: Props) {
         {tip && item ? <div className="footerbar-tip">{tip}</div> : null}
       </span>
       <span className={item ? "footerbar-meta" : "footerbar-meta idle"}>
-        {sizeText} ｜ {timeText}
+        {sizeText}
+        <i className="meta-sep" />
+        {timeText}
       </span>
       {total === undefined ? null : (
         <span className="footerbar-status">

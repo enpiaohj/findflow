@@ -11,6 +11,7 @@ import AdvancedPage from "./pages/AdvancedPage";
 import { AppearanceSettingsPage, HotkeyPage, PrivacyPage, AboutPage } from "./pages/SettingsPages";
 import {
   ChartIcon,
+  ChevronDownIcon,
   DatabaseIcon,
   DocumentIcon,
   GearIcon,
@@ -75,6 +76,7 @@ type NavId = string;
 export default function ManageBody({ notice, initialPage }: { notice: (m: string) => void; initialPage?: string }) {
   const [page, setPage] = useState<NavId>((initialPage as NavId) ?? "index");
   const [tick, setTick] = useState(0);
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const refresh = () => setTick((t) => t + 1);
   const Active = (NAV_ITEMS.find((n) => n.id === page) ?? NAV_ITEMS[0]).el;
 
@@ -83,8 +85,15 @@ export default function ManageBody({ notice, initialPage }: { notice: (m: string
       <nav className="manage-nav">
         {NAV_GROUPS.map((group) => (
           <div key={group.id} className="nav-group">
-            <div className="nav-group-title">{group.title}</div>
-            {group.items.map((n) => (
+            <button
+              className="nav-group-title"
+              aria-expanded={!folded[group.id]}
+              onClick={() => setFolded((f) => ({ ...f, [group.id]: !f[group.id] }))}
+            >
+              <ChevronDownIcon size={12} />
+              {group.title}
+            </button>
+            {(folded[group.id] ? group.items.filter((n) => n.id === page) : group.items).map((n) => (
               <button
                 key={n.id}
                 className={"nav-item" + (page === n.id ? " nav-active" : "")}
