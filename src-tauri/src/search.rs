@@ -109,7 +109,8 @@ pub fn run(
                 bind.push(Box::new(sid));
                 // 空搜索浏览为资源管理器式：只列出该索引位置根目录的第一层。
                 // scope_id 仅由前端在无关键词时传入，关键词搜索不受影响
-                if !has_query {
+                // 带类型 / 时间等筛选时是「按条件找文件」，不是浏览，同样不受第一层限制
+                if !has_query && !ast.has_filters() {
                     let root: Option<String> = c
                         .query_row(
                             "SELECT path FROM scopes WHERE scope_id = ?1",
@@ -484,6 +485,37 @@ pub async fn cmd_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 空搜索只带类型筛选时是「按条件找文件」：不受默认位置根目录第一层的限制。
+    #[test]
+    fn filter_without_query_is_not_limited_to_root_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')", [])
+                .unwrap();
+            for (name, kind, parent) in [("top.txt", "doc", "D:/a"), ("pic.jpg", "image", "D:/a/sub")] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, ?3, 1, ?4)",
+                    rusqlite::params![name, format!("{parent}\\{name}"), kind, parent],
+                )
+                .unwrap();
+            }
+        });
+        // 纯浏览：只列根目录第一层
+        let browse = run(&store, &index, &QueryAst::default(), 10, Some(1)).unwrap();
+        assert_eq!(browse.items.len(), 1);
+        // 带类型筛选：子目录里的图片也应命中
+        let images = QueryAst {
+            kinds: vec!["image".into()],
+            ..Default::default()
+        };
+        let r = run(&store, &index, &images, 10, Some(1)).unwrap();
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].name, "pic.jpg");
+    }
 
     /// 已关闭的索引范围不参与搜索与计数；重新启用后恢复。
     #[test]

@@ -249,7 +249,10 @@ export default function QuickApp() {
 
   const hasQuery = query.trim().length > 0;
   const queryDefaults = getStartViewQueryDefaults(startView, hasQuery);
-  const browseDefaultSort = filter === "recent" ? "modified" : queryDefaults.sort;
+  // 点了筛选按钮即「按条件找文件」：跨全部启用的索引位置，默认按修改时间（最近优先）；
+  // 「大文件」启动视图仍按大小。只有未选筛选的空搜索才是「浏览默认索引位置」。
+  const browseDefaultSort =
+    filter === "all" ? queryDefaults.sort : filter === "recent" || startView.mode !== "large" ? "modified" : "size";
   const activeSort = hasQuery ? searchSort : browseSortOverride ?? browseDefaultSort;
   const visibleSorts = hasQuery ? SORTS : SORTS.filter((option) => option.id !== "relevance");
   const browseNoScope = !hasQuery && startView.mode === "index" && startView.scopeId === null;
@@ -276,7 +279,7 @@ export default function QuickApp() {
     if (!startViewReady) return;
 
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
-    const scopeId = queryDefaults.scopeId;
+    const scopeId = filter === "all" ? queryDefaults.scopeId : undefined;
     if (browseNoScope || browseHidden) {
       const hiddenGen = ++searchGen.current;
       setItems([]);
