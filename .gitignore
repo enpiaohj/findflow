@@ -36,3 +36,4 @@ releases/*/source/releases/
 
 # 内部设计 / 实施计划文档（不公开）
 docs/superpowers/
+releases/*/source/docs/superpowers/
