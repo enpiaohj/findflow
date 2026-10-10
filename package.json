@@ -1,6 +1,7 @@
 {
   "name": "findflow",
   "private": true,
+  "license": "MIT",
   "version": "0.7.1",
   "type": "module",
   "scripts": {

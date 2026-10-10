@@ -2,7 +2,8 @@
 
 Windows 本地优先的极速文件搜索与轻量文件处理工具。全局快捷键（默认 Alt + Space）呼出紧凑悬浮窗，在不打断当前工作的前提下完成查找、筛选、预览、定位与常用文件操作——把"找到文件到完成动作"压缩到数秒以内。
 
-> **当前状态**：`0.2.0` 开发版，设计文档 P1–P3 功能已实现主体。历史版本 v0.1.0 已归档（见下）。
+> **当前状态**：开发中，见 [Releases](../../releases) 获取最新安装包（Windows x64，NSIS / MSI）；版本变更见 `CHANGELOG.md`。
+> 本项目以 [MIT](LICENSE) 许可证发布。
 
 ## 核心能力
 
@@ -46,7 +47,7 @@ npm run tauri dev
 ```bash
 npm run build          # 前端类型检查 + 构建
 cd src-tauri
-cargo test             # Rust 单元测试（28 项）
+cargo test             # Rust 单元测试
 cargo build            # 桌面端编译
 npm run tauri build    # 完整桌面打包（NSIS / MSI + 更新签名产物）
 ```
@@ -79,11 +80,11 @@ releases/     正式发布快照（仅在正式发布时创建）
 
 ## 相关文档
 
-- 产品设计文档与 UI 概念图：工作区 `D:\AIProjects\ai-coding-workspace\projects\FindFlow\01-产品设计\`
-- 项目规则与发布约定：`CLAUDE.md`
 - 更新日志：`CHANGELOG.md`
 - 安全策略：`SECURITY.md`
+- 许可证：`LICENSE`（MIT）；第三方组件见 `THIRD-PARTY-NOTICES.md`
+- 项目规则与发布约定：`CLAUDE.md`
 
 ## 历史
 
-旧仓库（截至 v0.1.0 及其后 3 个提交）已于 2026-09-24 完整备份至 `D:\AIProjects\_Backup\2026-09-24-FindFlow-操作前备份-v1.0.bundle`，本仓库自零重建；v0.1.0 版本号永久退役。
+本仓库自 2026-09-24 从零重建；旧仓库的 v0.1.0 版本号永久退役，不再使用。
