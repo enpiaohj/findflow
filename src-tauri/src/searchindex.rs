@@ -204,7 +204,10 @@ impl SearchIndex {
         phrase: Option<&str>,
         search_content: bool,
     ) -> Box<dyn Query> {
-        let mut shoulds: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        // 多个关键词是「且」：每个词自成一组（组内是名称 / 拼音 / 正文等多种命中方式，满足其一即可），
+        // 各组之间必须同时满足。此前所有子句平铺为「或」，「报告 2026」会把只含其一的文件都召回，
+        // 候选名额被无关项挤占，真正同时含两词的文件反而可能被截掉。
+        let mut musts: Vec<(Occur, Box<dyn Query>)> = Vec::new();
         let term =
             |field: tantivy::schema::Field, v: &str, boost: f32| -> Box<dyn Query> {
                 Box::new(BoostQuery::new(
@@ -216,6 +219,7 @@ impl SearchIndex {
                 ))
             };
         for t in text.split_whitespace() {
+            let mut shoulds: Vec<(Occur, Box<dyn Query>)> = Vec::new();
             let len = t.chars().count();
             match len {
                 1 => shoulds.push((Occur::Should, term(self.name_uni, t, 1.0))),
@@ -255,8 +259,16 @@ impl SearchIndex {
                 shoulds.push((Occur::Should, term(self.py_ngram, t, 0.35)));
             }
             if len >= 2 && search_content {
-                shoulds.push((Occur::Should, term(self.content, t, 0.2)));
-                shoulds.push((Occur::Should, term(self.ocr, t, 0.2)));
+                // 正文按 jieba 切词建索引，查询词也要切成同样的词项并要求全部命中；
+                // 把整串当作一个词项只能命中恰好是词典词的查询（「年度项目管理报告」永远命不中）。
+                for field in [self.content, self.ocr] {
+                    if let Some(q) = self.cn_all_terms(field, t, 0.2) {
+                        shoulds.push((Occur::Should, q));
+                    }
+                }
+            }
+            if !shoulds.is_empty() {
+                musts.push((Occur::Must, Box::new(BooleanQuery::new(shoulds))));
             }
         }
         if let Some(p) = phrase {
@@ -272,13 +284,37 @@ impl SearchIndex {
                         (Occur::Must, q)
                     })
                     .collect();
-                shoulds.push((Occur::Should, Box::new(BooleanQuery::new(clauses))));
+                musts.push((Occur::Must, Box::new(BooleanQuery::new(clauses))));
             } else if let Some(first) = p.chars().next() {
                 let s: String = first.to_string();
-                shoulds.push((Occur::Should, term(self.name, &s, 0.5)));
+                musts.push((Occur::Must, term(self.name, &s, 0.5)));
             }
         }
-        Box::new(BooleanQuery::new(shoulds))
+        Box::new(BooleanQuery::new(musts))
+    }
+
+    /// 把查询词按 `cn` 分词器切成词项，要求该字段全部命中（且）；切不出词项返回 None。
+    fn cn_all_terms(&self, field: tantivy::schema::Field, text: &str, boost: f32) -> Option<Box<dyn Query>> {
+        use tantivy::tokenizer::TokenStream;
+        let mut analyzer = self.index.tokenizers().get("cn")?;
+        let mut stream = analyzer.token_stream(text);
+        let mut seen = std::collections::HashSet::new();
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        while stream.advance() {
+            let tok = stream.token().text.clone();
+            if tok.trim().is_empty() || !seen.insert(tok.clone()) {
+                continue;
+            }
+            let q: Box<dyn Query> = Box::new(TermQuery::new(
+                Term::from_field_text(field, &tok),
+                IndexRecordOption::WithFreqsAndPositions,
+            ));
+            clauses.push((Occur::Must, q));
+        }
+        if clauses.is_empty() {
+            return None;
+        }
+        Some(Box::new(BoostQuery::new(Box::new(BooleanQuery::new(clauses)), boost)))
     }
 
     /// 检索候选：(file_id, 文档地址)。片段生成直接复用地址，零额外查询。

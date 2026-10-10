@@ -6,7 +6,7 @@
 
 - **产品名**：FindFlow
 - **仓库**：`findflow`（GitHub：`enpiaohj/findflow`，Private，默认分支 `main`）
-- **版本**：Semantic Versioning。当前 `v0.7.0` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
+- **版本**：Semantic Versioning。当前 `v0.7.1` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
 - **Commit**：Conventional Commits（`feat:` / `fix:` / `docs:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
 - **发布产物**：安装包默认不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/` 与 `CHANGELOG.md` 入库，产物上传 GitHub Releases）。
 - **设计文档**：产品设计文档与 UI 概念图维护于工作区 `D:\AIProjects\ai-coding-workspace\projects\FindFlow\01-产品设计\`，不入本仓库。

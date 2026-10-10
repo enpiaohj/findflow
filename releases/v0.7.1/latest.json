@@ -1,0 +1,11 @@
+{
+  "version": "0.7.1",
+  "notes": "FindFlow v0.7.1：正文关键词按分词全部命中、通配符与特殊字符按字面匹配；右键菜单分组并支持键盘上下选择；网络共享（\\IP）索引改为并行读目录、跳过逐文件标识与预统计，进度每秒可见，不可达时明确报错。",
+  "pub_date": "2026-10-10T12:05:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ21OaTFRRnVSQWlHR3RlckJVOGF6QlFnRXdYUWN5bXh0cDg2OFh6M01CRkZCV1pRSnlFVElIWTJDMmZ6cjZNTG5VdmlDREl2bGRSZ0VvK3NYVmhtY2dvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjMzNzgyCWZpbGU6RmluZEZsb3ctdjAuNy4xLXdpbi14NjQtc2V0dXAuZXhlCnZKcGt1SUV1alpLQVlYc2JFbk1qMnlsN0ZrS0FjY3Y5ek9YT3ptRk4zNDZqUGNYV3ltbmlYcHRQS3ZkS25kSTcxWFk0TzF2eWJsQVEySWVtS0NBQUJRPT0K",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.7.1/FindFlow-v0.7.1-win-x64-setup.exe"
+    }
+  }
+}

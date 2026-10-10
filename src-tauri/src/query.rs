@@ -158,6 +158,31 @@ pub fn wildcard_to_like(pattern: &str) -> String {
     out
 }
 
+/// 普通文本 → 「包含」型 LIKE 模式（`%文本%`），文本中的 `%` `_` 与转义符按字面量处理。
+/// 配合 `LIKE ? ESCAPE '\'` 使用。此前直接拼 `%{}%`，`-_draft` 里的 `_` 会被当成单字符通配。
+pub fn contains_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('%');
+    for c in text.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// 形如 `*.ext` 的纯扩展名通配（扩展名内无其它通配符）→ 小写扩展名，可直接走 `ext` 索引，
+/// 免去对百万行逐个做 LIKE 比对。
+pub fn wildcard_ext_only(pattern: &str) -> Option<String> {
+    let ext = pattern.strip_prefix("*.")?;
+    if ext.is_empty() || ext.contains(['*', '?', '.', '\\', '/']) {
+        return None;
+    }
+    Some(ext.to_lowercase())
+}
+
 fn map_kind(v: &str) -> String {
     match v.to_lowercase().as_str() {
         "document" | "doc" | "文档" => "doc".into(),
@@ -362,5 +387,20 @@ mod tests {
         assert_eq!(ast.text.as_deref(), Some("AD升级"));
         assert!(ast.name_include.is_empty());
         assert_eq!(ast.exts, vec!["docx"]);
+    }
+
+    #[test]
+    fn contains_like_escapes_metachars() {
+        assert_eq!(contains_like("a_b%c"), "%a\\_b\\%c%");
+        assert_eq!(contains_like("a\\b"), "%a\\\\b%");
+    }
+
+    #[test]
+    fn wildcard_ext_only_detects_pure_extension_patterns() {
+        assert_eq!(wildcard_ext_only("*.PDF").as_deref(), Some("pdf"));
+        assert_eq!(wildcard_ext_only("*.tar.gz"), None, "含多段扩展名走整名匹配");
+        assert_eq!(wildcard_ext_only("报告*.pdf"), None);
+        assert_eq!(wildcard_ext_only("*.p?f"), None);
+        assert_eq!(wildcard_ext_only("*."), None);
     }
 }

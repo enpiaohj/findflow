@@ -1312,15 +1312,18 @@ button:disabled {
   cursor: pointer;
 }
 
-.menu-item:hover {
+.menu-item:hover,
+.menu-item:focus-visible {
   background: var(--surface-2);
+  outline: none;
 }
 
 .menu-danger {
   color: var(--danger);
 }
 
-.menu-danger:hover {
+.menu-danger:hover,
+.menu-danger:focus-visible {
   background: var(--danger-subtle);
 }
 

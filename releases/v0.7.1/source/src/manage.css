@@ -1,0 +1,729 @@
+/* FindFlow 管理窗 / 设置页样式。令牌定义见 styles.css，颜色一律使用令牌。 */
+
+/* ---------- 设置视图头部 ---------- */
+
+.settings-top {
+  display: flex;
+  align-items: center;
+  padding: 0 16px 8px;
+  width: 100%;
+  background: var(--bg);
+}
+
+.settings-back {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 0 10px 0 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-back:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.settings-back kbd {
+  margin-left: 4px;
+}
+
+/* ---------- 布局 ---------- */
+
+.manage-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  border-top: 1px solid var(--divider);
+}
+
+.manage-nav {
+  width: 196px;
+  flex-shrink: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--divider);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group + .nav-group {
+  margin-top: 8px;
+}
+
+.nav-group-title {
+  padding: 4px 12px 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-tertiary);
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.nav-item svg {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.nav-item:hover {
+  background: var(--surface-2);
+}
+
+.nav-active,
+.nav-active:hover {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.nav-active svg {
+  color: var(--accent-text);
+}
+
+/* 选中指示条 */
+.nav-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.manage-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px 40px;
+  background: var(--canvas);
+}
+
+.page {
+  max-width: 980px;
+}
+
+.page h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.page-desc {
+  margin: 4px 0 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---------- 卡片 ---------- */
+
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card > h3 {
+  margin-bottom: 8px;
+}
+
+.card p {
+  margin: 6px 0;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.muted {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.summary-line {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ---------- 通用按钮与输入（低优先级，便于 .btn-primary 等覆盖） ---------- */
+
+:where(.scope-actions, .toggle-row, .trial-actions, .card-head, .dup-footer, .card, .tag-create, .job-row) button:not(.btn-primary):not(.nav-item) {
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+:where(.scope-actions, .toggle-row, .trial-actions, .card-head, .dup-footer, .card, .tag-create, .job-row) button:not(.btn-primary):not(:disabled):hover {
+  background: var(--surface-2);
+}
+
+.card button.btn-primary {
+  height: 30px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+
+:where(.toggle-row, .rule-grid, .tag-create, .card) :is(select, input:not([type="checkbox"]):not([type="radio"]):not([type="color"])) {
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text-primary);
+  outline: none;
+}
+
+:where(.toggle-row, .rule-grid, .tag-create, .card) :is(select, input):focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.paths-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  resize: vertical;
+  outline: none;
+}
+
+.paths-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* 设置行与范围行中的复选框显示为开关 */
+.toggle-row input[type="checkbox"],
+.scope-enable input[type="checkbox"] {
+  appearance: none;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  flex-shrink: 0;
+  border-radius: 11px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg);
+  position: relative;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.toggle-row input[type="checkbox"]::after,
+.scope-enable input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.toggle-row input[type="checkbox"]:checked,
+.scope-enable input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle-row input[type="checkbox"]:checked::after,
+.scope-enable input[type="checkbox"]:checked::after {
+  transform: translateX(18px);
+  background: #ffffff;
+}
+
+/* 分段选择（主题等） */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.segmented button {
+  height: 28px !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 0 14px !important;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.segmented button.active {
+  background: var(--bg) !important;
+  color: var(--accent-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 索引健康横幅 ---------- */
+
+.health-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--success-subtle);
+  border: 1px solid var(--success-border);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  padding: 11px 16px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.health-banner b {
+  color: var(--success);
+}
+
+.health-ok {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #ffffff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.health-banner.busy {
+  background: var(--accent-subtle);
+  border-color: var(--accent-subtle-strong);
+}
+
+.health-banner.busy b {
+  color: var(--accent-text);
+}
+
+.health-banner.busy .health-ok {
+  background: var(--accent);
+}
+
+.health-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border-strong);
+}
+
+/* ---------- 索引范围 ---------- */
+
+.scope-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.scope-row:last-child {
+  border-bottom: none;
+}
+
+.scope-enable {
+  display: flex;
+}
+
+.scope-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.scope-path {
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scope-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.scope-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ---------- 设置行 ---------- */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.toggle-row:last-child {
+  border-bottom: none;
+}
+
+.toggle-row b {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.toggle-row .muted {
+  margin: 3px 0 0;
+}
+
+.toggle-on {
+  color: var(--success);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* ---------- 试扫 / 规则编辑 ---------- */
+
+.trial-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.trial-sample {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 8px 0;
+  padding-left: 18px;
+}
+
+.trial-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.rule-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin-bottom: 10px;
+}
+
+.rule-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.rule-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+/* ---------- 分页签 ---------- */
+
+.tab-row {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.tab-row button {
+  height: 30px;
+  border: none;
+  background: transparent;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tab-row button:hover {
+  color: var(--text-primary);
+}
+
+.tab-active,
+.tab-active:hover {
+  background: var(--bg) !important;
+  color: var(--accent-text) !important;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 表格 ---------- */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.data-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-weight: 500;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--divider);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.col-right {
+  text-align: right;
+}
+
+/* 自动表格布局下 max-width:0 + 百分比宽度：该列吸收剩余宽度并省略，表格不会横向溢出 */
+.cell-path,
+.data-table td.cell-path {
+  width: 45%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 重复文件 ---------- */
+
+.dup-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 10px 0;
+  overflow: hidden;
+}
+
+.dup-head {
+  background: var(--surface-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.dup-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  border-top: 1px solid var(--divider);
+}
+
+.dup-name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+/* ---------- 任务 ---------- */
+
+.progress-line {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.job-row:last-child {
+  border-bottom: none;
+}
+
+.job-info {
+  min-width: 220px;
+  font-size: 13px;
+}
+
+/* ---------- 状态徽标 ---------- */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+
+.badge-warn {
+  background: var(--warning-subtle);
+  color: var(--warning);
+}
+
+.badge-err {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.badge-muted {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+/* ---------- 标签 ---------- */
+
+.tag-create {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tag-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* 关于页 */
+.about-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.about-name {
+  font-size: 22px;
+  letter-spacing: 0.2px;
+}
+
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 0;
+  font-size: 13.5px;
+}
+
+.about-label {
+  flex: none;
+  width: 72px;
+  color: var(--text-secondary);
+}
+
+/* 旧数据目录残留提示：仅在使用过「更改存储位置」后出现 */
+.legacy-notice {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--warning-subtle);
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+}
+
+.legacy-notice p {
+  margin: 0 0 6px;
+}
+
+.legacy-notice code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.legacy-notice button {
+  margin-top: 4px;
+}

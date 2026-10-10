@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::{params, Connection};
@@ -54,7 +54,10 @@ fn stat_with_meta(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let (serial, native_id) = if is_dir {
+    // 文件标识要对每个文件单独打开一次句柄：本地盘是微秒级，SMB 上每个文件一次网络往返，
+    // 是网络共享索引慢的首要原因。网络共享本就不支持稳定标识跟踪（不监听、靠校准），直接跳过。
+    let is_network = path.to_string_lossy().starts_with("\\\\");
+    let (serial, native_id) = if is_dir || is_network {
         (None, None)
     } else {
         crate::identity::native_identity(path)
@@ -202,6 +205,9 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// 网络共享并行读目录的工作线程数：再多会给文件服务器带来过大压力。
+const NETWORK_WORKERS: usize = 4;
+
 /// 遍历过程的可变上下文（替代一长串 &mut 参数）。
 struct Walk<'a, F: FnMut(Vec<FileUpsert>)> {
     opts: &'a ScopeOptions,
@@ -215,6 +221,9 @@ struct Walk<'a, F: FnMut(Vec<FileUpsert>)> {
     /// 校准模式：与库内快照比对，未变化的条目直接跳过（不取文件标识、不写库）；
     /// 遍历到的条目从快照中移除，结束后剩余的即为磁盘上已不存在的条目。
     known: Option<&'a mut KnownMap>,
+    /// 网络共享（UNC）：目录枚举可能很慢甚至长时间无响应，需要持续给出当前位置的反馈。
+    network: bool,
+    last_report: std::time::Instant,
 }
 
 impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
@@ -239,6 +248,16 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
     /// 遍历目录树：受保护目录、`$` 开头系统目录、应用数据目录、隐藏目录、排除规则整树跳过；
     /// 不跟随符号链接 / 目录联接（避免循环与重复计数）。
     fn walk(&mut self, dir: &Path) {
+        // 网络共享：每进入一个目录至多每秒汇报一次，让用户看得出是在慢慢走还是卡住了
+        if self.network && self.last_report.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(ctx) = self.ctx {
+                ctx.progress(
+                    0.0,
+                    &format!("正在读取：{}（已遍历 {} 项）", dir.display(), self.seen),
+                );
+            }
+            self.last_report = std::time::Instant::now();
+        }
         let read = match std::fs::read_dir(dir) {
             Ok(r) => r,
             Err(_) => {
@@ -247,28 +266,125 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
             }
         };
         for entry in read.flatten() {
-            if let Some(ctx) = self.ctx {
-                ctx.wait_if_paused();
-                if ctx.cancelled() {
-                    return;
-                }
-                self.seen += 1;
-                if self.count_only && self.seen % 20000 == 0 {
-                    // 统计阶段持续给出反馈，避免看起来像卡死
-                    ctx.progress(0.0, &format!("正在遍历，已发现 {} 项", self.seen));
-                }
+            if self.stopped() {
+                return;
             }
-            let path = entry.path();
             // Windows 上目录枚举自带元数据，无需额外系统调用
-            let Ok(meta) = entry.metadata() else {
+            let meta = entry.metadata();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(sub) = self.handle_entry(entry.path(), name, meta) {
+                self.walk(&sub);
+            }
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.ctx.is_some_and(|c| c.cancelled())
+    }
+
+    /// 网络共享的并行遍历：几个工作线程只负责「读目录」（慢在网络往返），
+    /// 条目的过滤、比对、批量写库仍在调用线程里串行处理，逻辑与顺序遍历完全一致。
+    fn walk_parallel(&mut self, root: &Path) {
+        use std::sync::{mpsc, Arc, Mutex};
+        type Listing = (PathBuf, Option<Vec<(PathBuf, String, std::io::Result<std::fs::Metadata>)>>);
+        let (work_tx, work_rx) = mpsc::channel::<PathBuf>();
+        let work_rx = Arc::new(Mutex::new(work_rx));
+        let (res_tx, res_rx) = mpsc::channel::<Listing>();
+        for _ in 0..NETWORK_WORKERS {
+            let work_rx = Arc::clone(&work_rx);
+            let res_tx = res_tx.clone();
+            std::thread::spawn(move || loop {
+                let dir = match work_rx.lock().map(|r| r.recv()) {
+                    Ok(Ok(d)) => d,
+                    _ => break, // 发送端关闭：遍历结束或被取消
+                };
+                let listing = std::fs::read_dir(&dir).ok().map(|rd| {
+                    rd.flatten()
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            (e.path(), name, e.metadata())
+                        })
+                        .collect()
+                });
+                if res_tx.send((dir, listing)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(res_tx);
+        let mut outstanding = 1usize;
+        if work_tx.send(root.to_path_buf()).is_err() {
+            return;
+        }
+        while outstanding > 0 {
+            // 带超时等待，期间仍能响应取消与汇报进度
+            let (dir, listing) = match res_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(r) => r,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if self.stopped() {
+                        return;
+                    }
+                    self.report_network("等待网络响应", root);
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            };
+            outstanding -= 1;
+            self.report_network("正在读取", &dir);
+            let Some(entries) = listing else {
                 self.errors += 1;
                 continue;
             };
+            for (path, name, meta) in entries {
+                if self.stopped() {
+                    return; // 丢弃 work_tx，工作线程在当前读取结束后自行退出
+                }
+                if let Some(sub) = self.handle_entry(path, name, meta) {
+                    if work_tx.send(sub).is_ok() {
+                        outstanding += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 网络共享：至多每秒汇报一次当前位置。
+    fn report_network(&mut self, what: &str, dir: &Path) {
+        if self.last_report.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(ctx) = self.ctx {
+                ctx.progress(
+                    0.0,
+                    &format!("{what}：{}（已遍历 {} 项）", dir.display(), self.seen),
+                );
+            }
+            self.last_report = std::time::Instant::now();
+        }
+    }
+
+    /// 处理一个目录项；若是需要深入的子目录则返回其路径。
+    fn handle_entry(
+        &mut self,
+        path: PathBuf,
+        name: String,
+        meta: std::io::Result<std::fs::Metadata>,
+    ) -> Option<PathBuf> {
+        if let Some(ctx) = self.ctx {
+            ctx.wait_if_paused();
+            self.seen += 1;
+            if self.count_only && self.seen % 20000 == 0 {
+                // 统计阶段持续给出反馈，避免看起来像卡死
+                ctx.progress(0.0, &format!("正在遍历，已发现 {} 项", self.seen));
+            }
+        }
+        let Ok(meta) = meta else {
+            self.errors += 1;
+            return None;
+        };
+        {
             let attrs = {
                 use std::os::windows::fs::MetadataExt;
                 meta.file_attributes()
             };
-            let name = entry.file_name().to_string_lossy().to_string();
             let excluded = (!self.opts.include_hidden && util::is_hidden(attrs))
                 || crate::scope::segment_excluded(&name, self.opts);
             if meta.is_dir() {
@@ -277,7 +393,7 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
                     || crate::scope::is_protected(&name)
                     || util::is_app_data_path(&util::normalize_path(&path))
                 {
-                    continue; // 整树跳过
+                    return None; // 整树跳过
                 }
                 if self.count_only {
                     self.total += 1;
@@ -290,7 +406,7 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
                         self.push(u);
                     }
                 }
-                self.walk(&path);
+                return Some(path);
             } else if !excluded {
                 if self.count_only {
                     self.total += 1;
@@ -308,6 +424,7 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
                 }
             }
         }
+        None
     }
 
     fn finish(mut self) -> (u64, u64) {
@@ -330,6 +447,8 @@ fn count_dir(root: &Path, opts: &ScopeOptions, ctx: Option<&JobContext>) -> (u64
         total: 0,
         ctx,
         known: None,
+        network: crate::scope::is_unc_path(&root.to_string_lossy()),
+        last_report: std::time::Instant::now(),
     };
     w.walk(root);
     w.finish()
@@ -354,8 +473,14 @@ fn walk_dir(
         total: 0,
         ctx,
         known,
+        network: crate::scope::is_unc_path(&root.to_string_lossy()),
+        last_report: std::time::Instant::now(),
     };
-    w.walk(root);
+    if w.network {
+        w.walk_parallel(root);
+    } else {
+        w.walk(root);
+    }
     w.finish().1
 }
 
@@ -450,9 +575,28 @@ fn run_initial_scan(
     root: String,
     opts: ScopeOptions,
 ) {
-    // 阶段一：快速统计总数（准确进度的分母；仅枚举目录项，远快于正式扫描）
-    ctx.progress(0.0, "正在统计文件数量…");
-    let (total, count_errors) = count_dir(Path::new(&root), &opts, Some(&ctx));
+    let network = crate::scope::is_unc_path(&root);
+    if network {
+        // 先确认共享可达：否则会表现为「扫描完成、0 项」，用户看不出是网络不通
+        ctx.progress(0.0, "正在连接网络位置…");
+        if let Err(e) = std::fs::read_dir(&root) {
+            db.with_conn(|c| {
+                c.execute("UPDATE scopes SET state='idle' WHERE scope_id=?1", [scope_id])
+                    .ok();
+            });
+            ctx.finish_failed(&format!("无法访问 {root}（网络不可达或无权限）：{e}"));
+            return;
+        }
+    }
+    // 阶段一：快速统计总数（准确进度的分母；仅枚举目录项，远快于正式扫描）。
+    // 网络共享跳过：预统计要把整棵目录树在网络上走一遍，正式扫描再走一遍，耗时翻倍；
+    // 改为边扫边报已索引条数。
+    let (total, count_errors) = if network {
+        (0, 0)
+    } else {
+        ctx.progress(0.0, "正在统计文件数量…");
+        count_dir(Path::new(&root), &opts, Some(&ctx))
+    };
     if ctx.cancelled() {
         ctx.finish_cancelled();
         db.with_conn(|c| {
@@ -461,7 +605,7 @@ fn run_initial_scan(
         });
         return;
     }
-    if total == 0 {
+    if total == 0 && !network {
         db.with_conn(|c| {
             c.execute(
                 "UPDATE scopes SET state='idle', baseline_at=?2, last_scan_ms=?3 WHERE scope_id=?1",
@@ -500,10 +644,14 @@ fn run_initial_scan(
             tracing::warn!("扫描批次写入失败: {e}");
         }
         done += batch.len() as f64;
-        ctx.progress(
-            (done / total as f64).min(0.99),
-            &format!("已索引 {} / {} 项", done as u64, total),
-        );
+        if network {
+            ctx.progress(0.0, &format!("已索引 {} 项（网络位置不预先统计总数）", done as u64));
+        } else {
+            ctx.progress(
+                (done / total as f64).min(0.99),
+                &format!("已索引 {} / {} 项", done as u64, total),
+            );
+        }
         // 批间让出：给其他后台写入获取数据库锁的机会
         std::thread::sleep(std::time::Duration::from_millis(8));
     });
@@ -774,6 +922,50 @@ pub fn start_auto_calibrate(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    /// 并行遍历（网络共享用）与顺序遍历必须得到完全相同的条目集合。
+    #[test]
+    fn parallel_walk_matches_sequential() {
+        let dir = tempfile::tempdir().unwrap();
+        for d in 0..6 {
+            for e in 0..4 {
+                let sub = dir.path().join(format!("d{d}")).join(format!("e{e}"));
+                std::fs::create_dir_all(&sub).unwrap();
+                for f in 0..5 {
+                    std::fs::write(sub.join(format!("f{f}.txt")), b"x").unwrap();
+                }
+            }
+        }
+        let opts = ScopeOptions::default();
+        let collect = |parallel: bool| {
+            let mut paths: Vec<String> = Vec::new();
+            let mut w = Walk {
+                opts: &opts,
+                count_only: false,
+                batch: Vec::new(),
+                on_batch: |b: Vec<FileUpsert>| paths.extend(b.into_iter().map(|u| u.path)),
+                errors: 0,
+                seen: 0,
+                total: 0,
+                ctx: None,
+                known: None,
+                network: false,
+                last_report: std::time::Instant::now(),
+            };
+            if parallel {
+                w.walk_parallel(dir.path());
+            } else {
+                w.walk(dir.path());
+            }
+            w.finish();
+            paths.sort();
+            paths
+        };
+        let seq = collect(false);
+        let par = collect(true);
+        assert_eq!(seq.len(), 6 + 24 + 120);
+        assert_eq!(seq, par);
+    }
+
     use super::*;
 
     fn conn_with_scope() -> Connection {

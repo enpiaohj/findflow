@@ -56,6 +56,11 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
     );
   }, [renaming]);
 
+  // 打开后焦点落在第一项，直接 ↑↓ / Enter 即可操作；退出重命名后也回到菜单项
+  useEffect(() => {
+    if (!renaming) menuRef.current?.querySelector<HTMLButtonElement>(".menu-item")?.focus();
+  }, [renaming, item?.fileId]);
+
   if (!item) return null;
   const path = item.path;
 
@@ -100,24 +105,46 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
     }
   };
 
-  const menuItems: { label: string; action: () => void }[] = [
-    { label: "打开", action: openItem },
-    { label: "在文件夹中定位", action: () => run(actionLocate(path)) },
-    { label: "复制完整路径", action: () => run(actionCopyPath(path, "full")) },
-    { label: "复制文件名", action: () => run(actionCopyPath(path, "name")) },
-    { label: "复制父目录", action: () => run(actionCopyPath(path, "parent")) },
-    { label: "复制 Markdown 链接", action: () => run(actionCopyPath(path, "markdown")) },
-    { label: "复制文件", action: () => run(actionCopyFiles([path])) },
-    { label: "重命名…", action: () => setRenaming(true) },
-    { label: "打开方式…", action: () => run(actionOpenWith(path)) },
-    { label: "在终端打开", action: () => run(actionOpenTerminal(path)) },
-    { label: "在 VS Code 打开", action: () => run(actionOpenVscode(path)) },
-    {
-      label: item.favorite ? "取消收藏" : "收藏",
-      action: () => run(favoriteToggle(item.fileId).then(() => "收藏已更新"), true),
-    },
-    { label: "属性", action: () => run(actionProperties(path)) },
+  // 分组：打开类 / 复制类 / 管理类；组间画分隔线，最常用的放最上面。
+  type MenuItem = { label: string; action: () => void };
+  const menuGroups: MenuItem[][] = [
+    [
+      { label: "打开", action: openItem },
+      { label: "在文件夹中定位", action: () => run(actionLocate(path)) },
+      // 「打开方式」只对文件有意义，文件夹没有可选的关联程序
+      ...(item.isDir ? [] : [{ label: "打开方式…", action: () => run(actionOpenWith(path)) }]),
+    ],
+    [
+      { label: "复制完整路径", action: () => run(actionCopyPath(path, "full")) },
+      { label: "复制文件名", action: () => run(actionCopyPath(path, "name")) },
+      { label: "复制父目录", action: () => run(actionCopyPath(path, "parent")) },
+      { label: "复制 Markdown 链接", action: () => run(actionCopyPath(path, "markdown")) },
+      { label: "复制文件", action: () => run(actionCopyFiles([path])) },
+    ],
+    [
+      { label: "重命名…", action: () => setRenaming(true) },
+      {
+        label: item.favorite ? "取消收藏" : "收藏",
+        action: () => run(favoriteToggle(item.fileId).then(() => "收藏已更新"), true),
+      },
+      { label: "在终端打开", action: () => run(actionOpenTerminal(path)) },
+      { label: "在 VS Code 打开", action: () => run(actionOpenVscode(path)) },
+      { label: "属性", action: () => run(actionProperties(path)) },
+    ],
   ];
+
+  /** 键盘操作：↑↓ 在菜单项间移动焦点（首尾循环），Enter 由按钮原生触发。 */
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (renaming || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>(".menu-item") ?? []);
+    if (buttons.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === "ArrowDown" ? (at + 1) % buttons.length : (at - 1 + buttons.length) % buttons.length;
+    buttons[next].focus();
+  };
 
   // 跟随触发位置弹出，并收在窗口范围内（尺寸未量出前先按估值定位）
   const { left, top } = clampOverlayPos(
@@ -133,6 +160,7 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
         <div
         className="menu-panel"
         ref={menuRef}
+        onKeyDown={onMenuKeyDown}
         style={pos ? { left, top, transform: "none" } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -159,10 +187,15 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
           </div>
         ) : (
           <>
-            {menuItems.map((m) => (
-              <button key={m.label} className="menu-item" onClick={m.action}>
-                {m.label}
-              </button>
+            {menuGroups.map((group, gi) => (
+              <div key={gi}>
+                {gi > 0 ? <div className="menu-divider" /> : null}
+                {group.map((m) => (
+                  <button key={m.label} className="menu-item" onClick={m.action}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
             ))}
             <div className="menu-divider" />
             <button className="menu-item menu-danger" onClick={() => void doRecycle()}>

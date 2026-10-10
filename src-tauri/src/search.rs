@@ -142,26 +142,37 @@ pub fn run(
             }
         }
         for p in &ast.path_include {
-            where_parts.push("f.path LIKE ?".to_string());
-            bind.push(Box::new(format!("%{}%", p)));
+            where_parts.push("f.path LIKE ? ESCAPE '\\'".to_string());
+            bind.push(Box::new(crate::query::contains_like(p)));
         }
         for p in &ast.path_exclude {
-            where_parts.push("f.path NOT LIKE ?".to_string());
-            bind.push(Box::new(format!("%{}%", p)));
+            where_parts.push("f.path NOT LIKE ? ESCAPE '\\'".to_string());
+            bind.push(Box::new(crate::query::contains_like(p)));
         }
         for t in &ast.text_exclude {
-            where_parts.push("f.name NOT LIKE ? AND f.ext <> ?".to_string());
-            bind.push(Box::new(format!("%{}%", t)));
+            where_parts.push("f.name NOT LIKE ? ESCAPE '\\' AND f.ext <> ?".to_string());
+            bind.push(Box::new(crate::query::contains_like(t)));
             bind.push(Box::new(t.clone()));
         }
         // 文件名通配（`*` `?`）：按整名匹配，元字符已转义，故用 ESCAPE '\'
         for n in &ast.name_include {
-            where_parts.push("f.name LIKE ? ESCAPE '\\'".to_string());
-            bind.push(Box::new(crate::query::wildcard_to_like(n)));
+            if let Some(ext) = crate::query::wildcard_ext_only(n) {
+                // `*.pdf`：扩展名走索引，比对整库做 LIKE 快得多（文件夹的 ext 为空，不会误命中）
+                where_parts.push("f.ext = ?".to_string());
+                bind.push(Box::new(ext));
+            } else {
+                where_parts.push("f.name LIKE ? ESCAPE '\\'".to_string());
+                bind.push(Box::new(crate::query::wildcard_to_like(n)));
+            }
         }
         for n in &ast.name_exclude {
-            where_parts.push("f.name NOT LIKE ? ESCAPE '\\'".to_string());
-            bind.push(Box::new(crate::query::wildcard_to_like(n)));
+            if let Some(ext) = crate::query::wildcard_ext_only(n) {
+                where_parts.push("f.ext <> ?".to_string());
+                bind.push(Box::new(ext));
+            } else {
+                where_parts.push("f.name NOT LIKE ? ESCAPE '\\'".to_string());
+                bind.push(Box::new(crate::query::wildcard_to_like(n)));
+            }
         }
         if let Some(s) = ast.size_min {
             where_parts.push("f.size >= ?".into());
@@ -561,6 +572,109 @@ mod tests {
         assert_eq!(out2.total, 5);
     }
 
+    /// 多个关键词是「且」：只含其中一个词的文件不得出现在结果里。
+    #[test]
+    fn multiple_keywords_must_all_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+        });
+        for name in ["年度报告2026.pdf", "年度报告2025.pdf", "旅行计划2026.docx"] {
+            let fid = store.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                    rusqlite::params![name, format!("D:/a\\{name}")],
+                )
+                .unwrap();
+                c.last_insert_rowid() as u64
+            });
+            index.add(index.build_doc(fid, name, None, None)).unwrap();
+        }
+        index.commit().unwrap();
+        index.reload();
+
+        let ast = QueryAst {
+            text: Some("报告 2026".into()),
+            ..Default::default()
+        };
+        let out = run(&store, &index, &ast, 20, None).unwrap();
+        let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["年度报告2026.pdf"], "两个词都要命中");
+    }
+
+    /// 正文检索：查询词要按 jieba 切成词项再匹配，整串当作单个词项会让长词永远命不中。
+    #[test]
+    fn content_query_is_segmented_like_indexed_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+        });
+        let fid = store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                 VALUES (1, 'notes.txt', 'D:/a\\notes.txt', 'doc', 1, 'D:/a')",
+                [],
+            )
+            .unwrap();
+            c.last_insert_rowid() as u64
+        });
+        index
+            .add(index.build_doc(fid, "notes.txt", Some("本季度的项目管理报告详见附录"), None))
+            .unwrap();
+        index.commit().unwrap();
+        index.reload();
+
+        let ast = QueryAst {
+            text: Some("项目管理报告".into()),
+            ..Default::default()
+        };
+        let out = run(&store, &index, &ast, 20, None).unwrap();
+        assert_eq!(out.items.len(), 1, "文件名不含该词，应由正文命中");
+    }
+
+    /// 排除词里的 `_` `%` 是字面量，不是 LIKE 通配。
+    #[test]
+    fn exclude_text_treats_like_metachars_literally() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+            for name in ["a_draft.txt", "abdraft.txt"] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                    rusqlite::params![name, format!("D:/a\\{name}")],
+                )
+                .unwrap();
+            }
+        });
+        let ast = QueryAst {
+            text_exclude: vec!["_draft".into()],
+            ..Default::default()
+        };
+        let out = run(&store, &index, &ast, 20, None).unwrap();
+        let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, vec!["abdraft.txt"], "只排除字面含 _draft 的文件");
+    }
+
     /// 通配模式按整名匹配：`*` 任意多字符、`?` 单字符，且元字符被转义。
     #[test]
     fn wildcard_filters_by_full_name() {
@@ -583,15 +697,20 @@ mod tests {
                 "note-1.txt",
             ] {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
-                    rusqlite::params![name, format!("D:/a\\{name}")],
+                    "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, ?3, 'doc', 1, 'D:/a')",
+                    // 扫描器写入的 ext 是小写、无点的扩展名；`*.pdf` 走 ext 索引依赖它
+                    rusqlite::params![
+                        name,
+                        format!("D:/a\\{name}"),
+                        name.rsplit('.').next().unwrap_or("")
+                    ],
                 )
                 .unwrap();
             }
         });
 
-        let names = |ast: &QueryAst| -> Vec<String> {
+        let names =|ast: &QueryAst| -> Vec<String> {
             let mut v: Vec<String> = run(&store, &index, ast, 20, None)
                 .unwrap()
                 .items
@@ -645,8 +764,8 @@ mod tests {
             )
             .unwrap();
             c.execute(
-                "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                 VALUES (1, 'deep.pdf', 'D:/a/sub\\deep.pdf', 'doc', 1, 'D:/a/sub')",
+                "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
+                 VALUES (1, 'deep.pdf', 'D:/a/sub\\deep.pdf', 'pdf', 'doc', 1, 'D:/a/sub')",
                 [],
             )
             .unwrap();
