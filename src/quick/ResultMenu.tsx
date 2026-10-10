@@ -115,11 +115,12 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
       ...(item.isDir ? [] : [{ label: "打开方式…", action: () => run(actionOpenWith(path)) }]),
     ],
     [
+      // 「复制文件」等同系统 Ctrl+C，最常用，排在最前
+      { label: item.isDir ? "复制文件夹" : "复制文件", action: () => run(actionCopyFiles([path])) },
       { label: "复制完整路径", action: () => run(actionCopyPath(path, "full")) },
-      { label: "复制文件名", action: () => run(actionCopyPath(path, "name")) },
+      { label: item.isDir ? "复制文件夹名" : "复制文件名", action: () => run(actionCopyPath(path, "name")) },
       { label: "复制父目录", action: () => run(actionCopyPath(path, "parent")) },
       { label: "复制 Markdown 链接", action: () => run(actionCopyPath(path, "markdown")) },
-      { label: "复制文件", action: () => run(actionCopyFiles([path])) },
     ],
     [
       { label: "重命名…", action: () => setRenaming(true) },
@@ -164,7 +165,6 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh }: 
         style={pos ? { left, top, transform: "none" } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="menu-title">{item.name}</div>
         {renaming ? (
           <div className="menu-rename">
             <input

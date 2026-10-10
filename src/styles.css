@@ -1487,18 +1487,6 @@ button:disabled {
   }
 }
 
-.menu-title {
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--divider);
-  margin-bottom: 4px;
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .menu-item {
   display: block;
   width: 100%;
