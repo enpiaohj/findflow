@@ -165,7 +165,7 @@ export default function IndexPage({ notice }: PageCtx) {
             <div className="scope-info">
               <div className="scope-path">{s.path}</div>
               <div className="scope-meta">
-                {s.filesCount.toLocaleString()} 个文件 · {SCOPE_STATES[s.state] ?? s.state}
+                {s.filesCount.toLocaleString()} 个文件 · {s.enabled ? (SCOPE_STATES[s.state] ?? s.state) : "已关闭，不参与搜索"}
                 {s.baselineAt ? ` · 基线 ${new Date(s.baselineAt).toLocaleString()}` : ""}
               </div>
             </div>

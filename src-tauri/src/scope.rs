@@ -185,6 +185,7 @@ pub async fn scope_remove(
         Ok(())
     })?;
     crate::search::invalidate_total_cache();
+    crate::diagnostics::invalidate_health_cache();
     store.unwatch_scope(scope_id);
     if delete_index {
         // 百万级行的删除放到后台分块执行（同步删除索引文档），界面立即返回
@@ -219,6 +220,7 @@ pub async fn scope_set_enabled(
             Ok::<(), String>(())
         })?;
     crate::search::invalidate_total_cache();
+    crate::diagnostics::invalidate_health_cache();
     if !enabled {
         store.unwatch_scope(scope_id);
     } else {

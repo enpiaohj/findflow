@@ -328,6 +328,12 @@ export default function QuickApp() {
     return () => window.clearTimeout(t);
   }, [runSearch]);
 
+  // 从设置返回：索引范围的启用状态可能变了，重新查询让命中数与「索引 N 条」同步
+  useEffect(() => {
+    if (!settingsOpen) runSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen]);
+
   useEffect(() => {
     setSelectedIndex(0);
   }, [activeSort, filter, query, startView.mode, startView.scopeId]);

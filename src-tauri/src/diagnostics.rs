@@ -16,6 +16,11 @@ struct HeavyStats {
 static HEAVY: std::sync::Mutex<Option<HeavyStats>> = std::sync::Mutex::new(None);
 const HEAVY_TTL: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// 范围开关 / 增删后让健康统计缓存失效，设置页的「已索引 N 个文件」才会立即变化。
+pub fn invalidate_health_cache() {
+    *HEAVY.lock().unwrap() = None;
+}
+
 #[tauri::command]
 pub async fn diagnostics_health(
     store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
@@ -36,7 +41,8 @@ fn compute_health(db: &crate::settings::DbHandle) -> Result<IndexHealth, String>
                             COALESCE(SUM(ocr_state='done'), 0),
                             COALESCE(SUM(ocr_state='failed'), 0),
                             COALESCE(MAX(updated_ms), 0)
-                     FROM files",
+                     FROM files
+                     WHERE scope_id IN (SELECT scope_id FROM scopes WHERE enabled=1)",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                 )
