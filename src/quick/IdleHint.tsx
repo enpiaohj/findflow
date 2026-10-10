@@ -7,6 +7,8 @@ export const TIPS: { query: string; desc: string }[] = [
   { query: "size:>100MB", desc: "按大小" },
   { query: "modified:7d", desc: "最近 7 天修改" },
   { query: "-type:图片", desc: "排除某类文件" },
+  { query: "path:D:\\Temp", desc: "限定在某个文件夹" },
+  { query: "-path:node_modules", desc: "排除某个文件夹" },
 ];
 
 interface Props {

@@ -20,7 +20,10 @@ pub fn parse(input: &str) -> QueryAst {
                     }
                     p.push(c2);
                 }
-                if !p.is_empty() {
+                // `key:"带 空格 的值"`：引号紧跟在 `key:` 后时，整段并入该条件的值（如 path:"D:\My Docs"）
+                if buf.ends_with(':') && buf.len() > 1 {
+                    buf.push_str(&p);
+                } else if !p.is_empty() {
                     if is_wildcard(&p) {
                         ast.name_include.push(p);
                     } else {
@@ -171,6 +174,31 @@ pub fn contains_like(text: &str) -> String {
     }
     out.push('%');
     out
+}
+
+/// `path:` 的值若是绝对路径（`D:\x`、`D:/x`、`\\server\share`），返回「目录本身」与「目录下一切」两个匹配项：
+/// `(精确路径, LIKE 前缀模式)`，按目录边界匹配，避免 `D:\Temp` 误中 `D:\Temp2`。
+/// 其余写法（如 `path:项目`）返回 None，仍按「路径包含该文字」处理。
+pub fn path_scope(value: &str) -> Option<(String, String)> {
+    let v = value.trim().replace('/', "\\");
+    let b = v.as_bytes();
+    let is_drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let is_unc = v.starts_with("\\\\");
+    if !is_drive && !is_unc {
+        return None;
+    }
+    let dir = v.trim_end_matches('\\');
+    // 盘符根目录（`D:\`）trim 后只剩 `D:`，补回反斜杠
+    let dir = if dir.len() == 2 { format!("{dir}\\") } else { dir.to_string() };
+    let mut like = String::with_capacity(dir.len() + 4);
+    for c in dir.trim_end_matches('\\').chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            like.push('\\');
+        }
+        like.push(c);
+    }
+    like.push_str("\\\\%");
+    Some((dir, like))
 }
 
 /// 形如 `*.ext` 的纯扩展名通配（扩展名内无其它通配符）→ 小写扩展名，可直接走 `ext` 索引，
@@ -403,4 +431,33 @@ mod tests {
         assert_eq!(wildcard_ext_only("*.p?f"), None);
         assert_eq!(wildcard_ext_only("*."), None);
     }
+
+    #[test]
+    fn path_value_supports_drive_colon_and_quotes() {
+        let ast = parse(r"path:D:\Temp 报告");
+        assert_eq!(ast.path_include, vec![r"D:\Temp".to_string()]);
+        assert_eq!(ast.text.as_deref(), Some("报告"));
+        // 带空格的路径用引号包住
+        let ast = parse(r#"path:"D:\My Docs" 预算"#);
+        assert_eq!(ast.path_include, vec![r"D:\My Docs".to_string()]);
+        assert_eq!(ast.text.as_deref(), Some("预算"));
+        // 普通引号短语不受影响
+        let ast = parse(r#""年度 报告""#);
+        assert!(ast.path_include.is_empty());
+        assert_eq!(ast.phrase.as_deref(), Some("年度 报告"));
+    }
+
+    #[test]
+    fn path_scope_only_for_absolute_paths() {
+        assert_eq!(path_scope("项目"), None);
+        assert_eq!(path_scope("temp\\a"), None);
+        let (dir, like) = path_scope("d:/Temp/").unwrap();
+        assert_eq!(dir, r"d:\Temp");
+        assert_eq!(like, r"d:\\Temp\\%");
+        // 盘符根目录保留反斜杠
+        assert_eq!(path_scope(r"D:\").unwrap().0, r"D:\");
+        // UNC
+        assert_eq!(path_scope(r"\\srv\share").unwrap().0, r"\\srv\share");
+    }
+
 }

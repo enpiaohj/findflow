@@ -6,6 +6,7 @@ import { queryTerms, splitHighlight } from "../src/highlight.ts";
 test("queryTerms 忽略过滤器、排除词，去掉通配符并按长度降序（等长保持原序）", () => {
   assert.deepEqual(queryTerms("报告 ext:pdf -草稿 *年度*"), ["报告", "年度"]);
   assert.deepEqual(queryTerms("  "), []);
+  assert.deepEqual(queryTerms('报告 path:"D:\My Docs" -path:"E:\a b"'), ["报告"]);
   assert.deepEqual(queryTerms("ab abcd"), ["abcd", "ab"]);
   assert.deepEqual(queryTerms("Report report"), ["report"]);
 });

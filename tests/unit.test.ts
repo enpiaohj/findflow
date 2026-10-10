@@ -3,3 +3,4 @@ import "./startView.test.ts";
 import "./searchHistory.test.ts";
 import "./layout.test.ts";
 import "./highlight.test.ts";
+import "./searchScope.test.ts";

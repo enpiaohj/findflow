@@ -147,12 +147,25 @@ pub fn run(
             }
         }
         for p in &ast.path_include {
-            where_parts.push("f.path LIKE ? ESCAPE '\\'".to_string());
-            bind.push(Box::new(crate::query::contains_like(p)));
+            if let Some((dir, like)) = crate::query::path_scope(p) {
+                // 绝对路径：该目录本身及其下全部内容（按目录边界，不误中同前缀的兄弟目录）
+                where_parts.push("(f.path = ? COLLATE NOCASE OR f.path LIKE ? ESCAPE '\\')".to_string());
+                bind.push(Box::new(dir));
+                bind.push(Box::new(like));
+            } else {
+                where_parts.push("f.path LIKE ? ESCAPE '\\'".to_string());
+                bind.push(Box::new(crate::query::contains_like(p)));
+            }
         }
         for p in &ast.path_exclude {
-            where_parts.push("f.path NOT LIKE ? ESCAPE '\\'".to_string());
-            bind.push(Box::new(crate::query::contains_like(p)));
+            if let Some((dir, like)) = crate::query::path_scope(p) {
+                where_parts.push("NOT (f.path = ? COLLATE NOCASE OR f.path LIKE ? ESCAPE '\\')".to_string());
+                bind.push(Box::new(dir));
+                bind.push(Box::new(like));
+            } else {
+                where_parts.push("f.path NOT LIKE ? ESCAPE '\\'".to_string());
+                bind.push(Box::new(crate::query::contains_like(p)));
+            }
         }
         for t in &ast.text_exclude {
             where_parts.push("f.name NOT LIKE ? ESCAPE '\\' AND f.ext <> ?".to_string());
@@ -515,6 +528,47 @@ mod tests {
         let r = run(&store, &index, &images, 10, Some(1)).unwrap();
         assert_eq!(r.items.len(), 1);
         assert_eq!(r.items[0].name, "pic.jpg");
+    }
+
+    /// `path:D:\Temp` 按目录边界匹配：含该目录本身与其下内容，不误中 `D:\Temp2`；大小写不敏感。
+    #[test]
+    fn absolute_path_filter_matches_directory_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\\', 'now')", [])
+                .unwrap();
+            for (name, parent) in [
+                ("a.txt", "D:\\Temp"),
+                ("b.txt", "D:\\Temp\\sub"),
+                ("c.txt", "D:\\Temp2"),
+                ("d.txt", "E:\\Temp"),
+            ] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, 'doc', 1, ?3)",
+                    rusqlite::params![name, format!("{parent}\\{name}"), parent],
+                )
+                .unwrap();
+            }
+        });
+        let names = |q: &str| {
+            let ast = crate::query::parse(q);
+            let mut v: Vec<String> = run(&store, &index, &ast, 10, None)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|i| i.name)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(r"path:D:\Temp"), vec!["a.txt", "b.txt"]);
+        assert_eq!(names(r"path:d:/temp/"), vec!["a.txt", "b.txt"]);
+        assert_eq!(names(r"-path:D:\Temp"), vec!["c.txt", "d.txt"]);
+        // 相对写法仍是「路径包含」：Temp2 与 E:\Temp 也会命中
+        assert_eq!(names("path:Temp").len(), 4);
     }
 
     /// 已关闭的索引范围不参与搜索与计数；重新启用后恢复。

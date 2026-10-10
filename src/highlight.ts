@@ -11,7 +11,9 @@ export interface Segment {
  */
 export function queryTerms(query: string): string[] {
   const terms = new Set<string>();
-  for (const raw of query.split(/\s+/)) {
+  // 先去掉 `key:"带 空格 的值"`（如 path:"D:\My Docs"），否则引号内的词会被当成关键词
+  const plain = query.replace(/-?[A-Za-z]+:"[^"]*"/g, " ");
+  for (const raw of plain.split(/\s+/)) {
     if (!raw || raw.startsWith("-") || /^[A-Za-z]+:/.test(raw)) continue;
     const t = raw.replace(/["'*?]/g, "");
     if (t) terms.add(t.toLowerCase());

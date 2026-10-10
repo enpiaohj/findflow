@@ -36,6 +36,7 @@ import {
   removeSearch,
 } from "../searchHistory";
 import IdleHint, { TIPS } from "./IdleHint";
+import { folderFilterOf, withPathFilter } from "../searchScope";
 import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import { clampPaneWidth, DEFAULT_PANE_WIDTH } from "../layout";
@@ -786,6 +787,27 @@ export default function QuickApp() {
             focusInput();
           },
         })),
+        { kind: "sep" },
+        {
+          kind: "item",
+          label: "仅搜索所选项所在文件夹",
+          disabled: !selected || folderFilterOf(selected.path) === null,
+          onSelect: () => {
+            const filter = selected ? folderFilterOf(selected.path) : null;
+            if (!filter) return;
+            setQuery(withPathFilter(query, filter));
+            focusInput();
+          },
+        },
+        {
+          kind: "item",
+          label: "清除文件夹限定",
+          disabled: !/(^|\s)path:/i.test(query),
+          onSelect: () => {
+            setQuery(query.replace(/(^|\s)path:("[^"]*"|\S+)/gi, "").trim());
+            focusInput();
+          },
+        },
         { kind: "sep" },
         {
           kind: "item",
