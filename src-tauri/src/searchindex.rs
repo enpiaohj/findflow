@@ -16,6 +16,7 @@ pub struct SearchIndex {
     pub reader: IndexReader,
     pub fid: tantivy::schema::Field,
     pub name: tantivy::schema::Field,
+    pub name_uni: tantivy::schema::Field,
     pub name_bi: tantivy::schema::Field,
     pub name_tri: tantivy::schema::Field,
     pub py_ngram: tantivy::schema::Field,
@@ -47,6 +48,9 @@ impl SearchIndex {
             NumericOptions::default().set_stored().set_fast().set_indexed(),
         );
         let name = sb.add_text_field("name", text_opts(true, "cn"));
+        // 单字索引：n-gram 最小粒度若是 2，单个汉字就永远命不中任何词项，
+        // 用户搜「报」会得到 0 条。单字查询召回量本身很大，靠候选上限 + 相关度排序收敛。
+        let name_uni = sb.add_text_field("name_uni", text_opts(false, "uni"));
         let name_bi = sb.add_text_field("name_bi", text_opts(false, "bi"));
         let name_tri = sb.add_text_field("name_tri", text_opts(false, "tri"));
         let py_ngram = sb.add_text_field("py_ngram", text_opts(false, "py"));
@@ -116,6 +120,7 @@ impl SearchIndex {
             reader,
             fid,
             name,
+            name_uni,
             name_bi,
             name_tri,
             py_ngram,
@@ -137,6 +142,8 @@ impl SearchIndex {
         d.add_text(self.name, name);
         let lower = name.to_lowercase();
         let chars: Vec<char> = lower.chars().collect();
+        // 单字：整串交给 uni 分词器按字符切分
+        d.add_text(self.name_uni, lower.as_str());
         for w in chars.windows(2) {
             d.add_text(self.name_bi, w.iter().collect::<String>());
         }
@@ -211,7 +218,7 @@ impl SearchIndex {
         for t in text.split_whitespace() {
             let len = t.chars().count();
             match len {
-                1 => shoulds.push((Occur::Should, term(self.name, t, 1.0))),
+                1 => shoulds.push((Occur::Should, term(self.name_uni, t, 1.0))),
                 2 => {
                     if let Some(b) = tokenizer::bigram(t) {
                         shoulds.push((Occur::Should, term(self.name_bi, &b, 0.6)));
@@ -342,6 +349,37 @@ impl SearchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 单个汉字必须能作为子串命中文件名。
+    /// n-gram 索引此前最小粒度是 2（bi），单字无法命中任何词项，
+    /// 于是搜「报」得到 0 条——用户看到的就是「搜一个字没反应」。
+    #[test]
+    fn single_char_query_matches_name_substring() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+        idx.add(idx.build_doc(1, "报告初稿.docx", None, None)).unwrap();
+        idx.add(idx.build_doc(2, "预算表.xlsx", None, None)).unwrap();
+        idx.commit().unwrap();
+        idx.reload();
+
+        let ids = |q: &str| -> Vec<i64> {
+            let query = idx.build_query(q, None, false);
+            let mut v: Vec<i64> = idx
+                .candidate_docs(query.as_ref(), 10)
+                .unwrap()
+                .iter()
+                .map(|(id, _)| *id as i64)
+                .collect();
+            v.sort();
+            v
+        };
+        // 首字、次字、末字（含扩展名内的字符）都应能命中
+        assert_eq!(ids("报"), vec![1], "首字应命中");
+        assert_eq!(ids("稿"), vec![1], "中间字应命中");
+        assert_eq!(ids("表"), vec![2], "末字应命中");
+        // 无关单字不得命中
+        assert!(ids("龙").is_empty());
+    }
 
     #[test]
     fn delete_then_add_keeps_single_doc_per_fid() {

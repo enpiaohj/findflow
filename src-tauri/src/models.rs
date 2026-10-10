@@ -68,12 +68,22 @@ pub struct QueryAst {
     pub exts: Vec<String>,
     #[serde(default)]
     pub kinds: Vec<String>,
+    /// 排除的文件类型（`-type:图片`）。必须与 `text_exclude` 分开：
+    /// 后者按「文件名子串 + 扩展名」排除，用它表达类型排除等于按名字排除，语义错误。
+    #[serde(default)]
+    pub kinds_exclude: Vec<String>,
     #[serde(default)]
     pub path_include: Vec<String>,
     #[serde(default)]
     pub path_exclude: Vec<String>,
     #[serde(default)]
     pub text_exclude: Vec<String>,
+    /// 文件名通配模式（`*` 任意多字符、`?` 单字符），按整名匹配。
+    #[serde(default)]
+    pub name_include: Vec<String>,
+    /// 排除的文件名通配模式。
+    #[serde(default)]
+    pub name_exclude: Vec<String>,
     #[serde(default)]
     pub size_min: Option<i64>,
     #[serde(default)]
@@ -90,9 +100,12 @@ impl QueryAst {
     pub fn has_filters(&self) -> bool {
         !self.exts.is_empty()
             || !self.kinds.is_empty()
+            || !self.kinds_exclude.is_empty()
             || !self.path_include.is_empty()
             || !self.path_exclude.is_empty()
             || !self.text_exclude.is_empty()
+            || !self.name_include.is_empty()
+            || !self.name_exclude.is_empty()
             || self.size_min.is_some()
             || self.size_max.is_some()
             || self.modified_after_ms.is_some()
@@ -122,6 +135,12 @@ impl QueryAst {
         }
         for t in &self.text_exclude {
             parts.push(format!("排除关键词「{t}」"));
+        }
+        for n in &self.name_include {
+            parts.push(format!("文件名匹配 {n}"));
+        }
+        for n in &self.name_exclude {
+            parts.push(format!("排除文件名匹配 {n}"));
         }
         if let Some(s) = self.size_min {
             parts.push(format!("大小 ≥ {}", format_size(s)));

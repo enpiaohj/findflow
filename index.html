@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/findflow.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FindFlow</title>
+    <style>
+      /* 首屏关键样式：在任何 JS/CSS 打包产物加载前先给出正确背景色，消除启动瞬间的白闪。
+         深色跟随系统；用户自定义主题随后由 initTheme 覆盖（两者同以系统主题为初值，不会二次闪烁）。 */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #1e2127;
+        }
+      }
+    </style>
     <script>
       // 临时诊断：把未捕获错误直接显示出来（定位管理窗白屏）
       window.addEventListener("error", function (e) {

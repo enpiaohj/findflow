@@ -1,0 +1,27 @@
+
+/* ---------- 布局修复（封板前） ---------- */
+
+/* 表格单元格不换行：修复大小列 7.6/GB 竖排 */
+.data-table th,
+.data-table td {
+  white-space: nowrap;
+}
+
+/* 规则栅格内输入框撑满列宽 */
+.rule-grid input,
+.rule-grid select,
+.tag-create input {
+  width: 100%;
+}
+
+/* 标签页选中态：提高优先级，避免被基础规则覆盖成白字白底 */
+.tab-row button.tab-active,
+.tab-row button.tab-active:hover {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #ffffff !important;
+}
+
+.tab-row button {
+  white-space: nowrap;
+}

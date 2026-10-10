@@ -51,6 +51,8 @@ const FILTER_QUERY: Record<FilterId, string> = {
   document: "type:document",
   folder: "type:folder",
   image: "type:image",
+  audio: "type:audio",
+  video: "type:video",
   recent: "modified:7d",
 };
 
@@ -67,7 +69,13 @@ export default function QuickApp() {
   const [sortOpen, setSortOpen] = useState(false);
   const [density, setDensity] = useState<Density>("compact");
   const [items, setItems] = useState<FileRow[]>([]);
+  // 是否已收到过一次搜索结果：此前列表为空只是「还没查完」，不能显示「没有匹配的结果」
+  const [searched, setSearched] = useState(false);
   const [total, setTotal] = useState(0);
+  // 空搜索隐藏结果时状态栏显示的全库索引总数（未取到前为 null，不显示）
+  const [allTotal, setAllTotal] = useState<number | null>(null);
+  // 命中总数：结果超过 200 条上限时，用它告诉用户实际命中了多少条
+  const [matched, setMatched] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -268,20 +276,32 @@ export default function QuickApp() {
     if (!startViewReady) return;
 
     const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
+    const scopeId = queryDefaults.scopeId;
     if (browseNoScope || browseHidden) {
-      searchGen.current += 1;
+      const hiddenGen = ++searchGen.current;
       setItems([]);
-      setTotal(0);
+      setMatched(0);
       setElapsed(0);
+      setTotal(0);
+      if (browseHidden) {
+        // 列表留白，但状态栏仍显示索引总数：不带位置取全库总数（只取 1 条，后端有 10 秒缓存）。
+        // 带位置时后端只数该位置根目录第一层，数字会远小于实际索引量，看起来像异常。
+        apiSearch("", undefined, 1, undefined)
+          .then((response) => {
+            if (hiddenGen === searchGen.current) setAllTotal(response.total);
+          })
+          .catch(() => undefined);
+      }
       return;
     }
 
-    const scopeId = queryDefaults.scopeId;
     const gen = ++searchGen.current;
     apiSearch(q, activeSort === "relevance" ? undefined : activeSort, 200, scopeId)
       .then((response) => {
         if (gen !== searchGen.current) return;
         setItems(response.items);
+        setSearched(true);
+        setMatched(response.matched);
         setTotal(response.total);
         setElapsed(response.elapsedMs);
       })
@@ -464,7 +484,7 @@ export default function QuickApp() {
             <input
               ref={inputRef}
               className="searchbar-input"
-              placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d）"
+              placeholder="搜索文件名、路径，或语法筛选（ext:docx size:>1GB modified:7d *.pdf）"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               autoFocus
@@ -548,8 +568,10 @@ export default function QuickApp() {
             onFilterChange={setFilter}
             density={density}
             onDensityChange={changeDensity}
-            count={browseHidden ? undefined : items.length}
+            count={browseHidden ? undefined : matched}
             limited={items.length >= 200}
+            filtered={hasQuery || filter !== "all"}
+            shown={items.length}
           />
           {browseHidden ? null : (
             <ResultList
@@ -565,12 +587,15 @@ export default function QuickApp() {
                 setMenuFor(item);
               }}
               onOpenSettings={() => setSettingsOpen(true)}
-              emptyReason={browseNoScope ? "no-scope" : undefined}
+              emptyReason={
+                browseNoScope ? "no-scope" : !searched ? "loading" : filter !== "all" ? "filtered" : undefined
+              }
             />
           )}
           <FooterBar
-            total={browseHidden ? undefined : total}
-            elapsed={browseHidden ? undefined : elapsed}
+            item={browseHidden ? null : items[selectedIndex] ?? null}
+            total={browseNoScope ? undefined : browseHidden ? allTotal ?? undefined : total}
+            elapsed={browseHidden || browseNoScope ? undefined : elapsed}
           />
         </>
       )}

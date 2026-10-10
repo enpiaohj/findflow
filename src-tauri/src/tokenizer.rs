@@ -67,14 +67,18 @@ impl TokenStream for CnTokenStream {
 
 /// 索引格式版本：分词方案变更或需清理旧索引时递增，触发自动重建。
 /// v3：fid 字段改为 indexed（此前删除全部失效），并清除累积的重复 / 过期文档。
-pub const INDEX_FORMAT: &str = "3";
+/// v4：新增单字索引 uni（此前 n-gram 最小粒度为 2，单个汉字无法命中）。
+pub const INDEX_FORMAT: &str = "4";
 
 /// 注册索引所需的全部分词器（n-gram 一律小写化）。
 /// v2 瘦身：拼音 n-gram 上限 8→6，首字母 1→2，去掉单字噪声。
+/// 注意：名称字段需要单字粒度（uni），否则「搜一个字」永远 0 结果；
+/// 上面的「去掉单字噪声」针对的是拼音字段，不适用于名称。
 pub fn register(index: &tantivy::Index) -> Result<(), String> {
     use tantivy::tokenizer::{LowerCaser, TextAnalyzer};
     index.tokenizers().register("cn", CnTokenizer::default());
     for (name, min, max) in [
+        ("uni", 1usize, 1usize),
         ("bi", 2usize, 2usize),
         ("tri", 3, 3),
         ("py", 1, 6),

@@ -73,12 +73,26 @@ export default function SpacePage({ notice }: PageCtx) {
   const recycleSelected = async () => {
     const paths = [...selected];
     if (paths.length === 0) return;
-    if (!(await confirm(`将把选中的 ${paths.length} 个文件移至回收站？`, "可在系统回收站中还原。"))) return;
+    // 稳定 ID 反查：勾选状态仍是路径集合，回收前补上 fileId（底线 3 双重校验）。
+    const byPath = new Map<string, number>();
+    for (const g of dupGroups) for (const f of g.files) byPath.set(f.path, f.fileId);
+    const files = paths
+      .map((p) => ({ fileId: byPath.get(p) ?? 0, path: p }))
+      .filter((f) => f.fileId !== 0);
+    if (files.length === 0) {
+      notice("所选文件不在当前列表中，请刷新后重试");
+      return;
+    }
+    if (!(await confirm(`将把选中的 ${files.length} 个文件移至回收站？`, "可在系统回收站中还原。"))) return;
     try {
-      const token = await issueDeleteToken(paths);
-      const results = await actionRecycle(paths, token);
-      const failed = results.filter((r) => r.status !== "ok").length;
-      notice(failed === 0 ? "已全部移至回收站" : `完成，失败 ${failed} 项`);
+      const token = await issueDeleteToken(files);
+      const results = await actionRecycle(files, token);
+      const failed = results.filter((r) => r.status !== "ok");
+      notice(
+        failed.length === 0
+          ? "已全部移至回收站"
+          : `完成，失败 ${failed.length} 项：${failed[0].reason ?? ""}`
+      );
       setSelected(new Set());
       pollDup();
     } catch (e) {

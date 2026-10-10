@@ -683,6 +683,95 @@ pub async fn cmd_rebuild(
     start_rebuild_job(&state, scope_id)
 }
 
+// ---------- 自动定期校准 ----------
+
+/// 自动校准间隔（小时）。网络共享范围不做实时监听，只能靠校准保持同步，
+/// 因此默认按天校准一次；用户可在设置中关闭（`ui.autoCalibrate`）。
+const AUTO_CALIBRATE_INTERVAL_HOURS: i64 = 24;
+/// 启动后首次检查的延迟（秒）：避开启动高峰（索引重建、首次扫描），
+/// 也不至于让用户等太久才享受到校准。
+const AUTO_CALIBRATE_FIRST_DELAY_SECS: u64 = 180;
+/// 轮询间隔（秒）：到点判断是否该校准，未到期则继续睡。
+const AUTO_CALIBRATE_TICK_SECS: u64 = 600;
+
+/// 判断某范围是否到了该校准的时间（`last_scan_ms` 距今超过间隔）。
+fn scope_needs_calibration(last_scan_ms: Option<i64>, now_ms: i64) -> bool {
+    let interval = AUTO_CALIBRATE_INTERVAL_HOURS * 3_600_000;
+    match last_scan_ms {
+        Some(t) => now_ms.saturating_sub(t) >= interval,
+        // 从未扫描过：交给常规扫描处理，自动校准不抢跑
+        None => false,
+    }
+}
+
+/// 启动自动定期校准循环：后台线程按间隔检查，到期的范围触发一次校准任务。
+/// 与手动校准共用 `start_recalibrate_job`，因此同样受「同类任务去重」保护，
+/// 不会与用户手动触发的校准并发。
+pub fn start_auto_calibrate(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("auto-calibrate".into())
+        .spawn(move || {
+            use tauri::Manager;
+            // 上次尝试时间（内存态）：校准失败时（如网络共享断开、移动盘拔出）
+            // recalibrate_scope 会提前返回且不更新 last_scan_ms，若不按尝试时间节流，
+            // 该范围会每轮都被判定为「到期」而无谓重试。此处保证同一范围
+            // 两次尝试之间至少间隔一个校准周期，无论成败。
+            let mut last_attempt: HashMap<i64, i64> = HashMap::new();
+            std::thread::sleep(std::time::Duration::from_secs(AUTO_CALIBRATE_FIRST_DELAY_SECS));
+            loop {
+                let state = app.state::<Arc<crate::AppState>>();
+                let enabled = state
+                    .db
+                    .get_or("ui.autoCalibrate", serde_json::json!(true))
+                    .as_bool()
+                    .unwrap_or(true);
+                if enabled {
+                    let now = util::now_ms();
+                    let due: Vec<i64> = state
+                        .db
+                        .with_conn(|c| {
+                            let mut stmt = c
+                                .prepare(
+                                    "SELECT scope_id, last_scan_ms FROM scopes WHERE enabled=1",
+                                )
+                                .map_err(|e| e.to_string())?;
+                            let rows = stmt
+                                .query_map([], |r| {
+                                    Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))
+                                })
+                                .map_err(|e| e.to_string())?;
+                            Ok::<_, String>(
+                                rows.filter_map(|x| x.ok())
+                                    .filter(|(_, last)| scope_needs_calibration(*last, now))
+                                    .map(|(id, _)| id)
+                                    .collect(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    // 逐个范围校准：单个范围失败不影响其它范围，且便于任务列表里看清进度
+                    for sid in due {
+                        // 本轮已尝试过（成功或失败）则跳过，等下一个周期
+                        if last_attempt
+                            .get(&sid)
+                            .map(|t| !scope_needs_calibration(Some(*t), now))
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        last_attempt.insert(sid, now);
+                        match start_recalibrate_job(&state, Some(sid)) {
+                            Ok(()) => tracing::info!("自动校准已启动：范围 {sid}"),
+                            // 已有同类任务在跑（用户手动触发或上一轮未结束）→ 跳过，下轮再试
+                            Err(e) => tracing::debug!("自动校准跳过范围 {sid}：{e}"),
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(AUTO_CALIBRATE_TICK_SECS));
+            }
+        })
+        .ok();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,5 +886,35 @@ mod tests {
         assert_eq!(emitted, vec!["b.txt".to_string()]);
         let missing: Vec<i64> = known.values().map(|v| v.0).collect();
         assert_eq!(missing, vec![3]);
+    }
+
+    #[test]
+    fn auto_calibrate_only_fires_after_interval() {
+        let hour = 3_600_000i64;
+        let now = 1_000_000_000_000i64;
+        // 从未扫描过：交给常规扫描，自动校准不抢跑
+        assert!(!scope_needs_calibration(None, now));
+        // 刚校准过：不到期
+        assert!(!scope_needs_calibration(Some(now), now));
+        assert!(!scope_needs_calibration(Some(now - 23 * hour), now));
+        // 超过间隔：到期
+        assert!(scope_needs_calibration(Some(now - 24 * hour), now));
+        assert!(scope_needs_calibration(Some(now - 72 * hour), now));
+        // 时钟回拨（last_scan_ms 在未来）不得触发，也不得 panic
+        assert!(!scope_needs_calibration(Some(now + 100 * hour), now));
+    }
+
+    #[test]
+    fn last_attempt_throttles_failed_scope() {
+        // 校准失败（网络断开）时 recalibrate_scope 不更新 last_scan_ms，
+        // 循环须靠 last_attempt 节流，否则每轮都重试。
+        let hour = 3_600_000i64;
+        let now = 1_000_000_000_000i64;
+        let attempted_at = now;
+        // 刚尝试过（即使失败）→ 未到下一周期，跳过
+        assert!(!scope_needs_calibration(Some(attempted_at), now));
+        assert!(!scope_needs_calibration(Some(attempted_at), now + 23 * hour));
+        // 过了整个周期 → 允许再试一次
+        assert!(scope_needs_calibration(Some(attempted_at), now + 24 * hour));
     }
 }

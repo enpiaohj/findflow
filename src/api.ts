@@ -20,6 +20,9 @@ export interface FileRow {
 
 export interface SearchResponse {
   items: FileRow[];
+  /** 命中总数；只返回前 N 条时用它说明实际有多少条命中 */
+  matched: number;
+  /** 索引总数（页脚「索引 N 条」） */
   total: number;
   elapsedMs: number;
   explain: string[];
@@ -129,8 +132,17 @@ export const organizeSuggest = (
   ruleType: string,
   targetDir: string
 ): Promise<PlanItem[]> => invoke("organize_suggest", { sourceDir, ruleType, targetDir });
-export const organizeExecute = (items: PlanItem[]): Promise<{ ok: number; failed: number }> =>
-  invoke("organize_execute", { items });
+export const organizeIssueToken = (
+  sourceDir: string,
+  ruleType: string,
+  targetDir: string
+): Promise<string> => invoke("organize_issue_token", { sourceDir, ruleType, targetDir });
+export const organizeExecute = (
+  sourceDir: string,
+  ruleType: string,
+  targetDir: string,
+  token: string
+): Promise<PlanItem[]> => invoke("organize_execute", { sourceDir, ruleType, targetDir, token });
 
 export interface ScanProgress {
   progress: number;
@@ -160,12 +172,18 @@ export const actionCopyPath = (path: string, format: string): Promise<string> =>
   invoke("action_copy_path", { path, format });
 export const actionCopyFiles = (paths: string[]): Promise<string> =>
   invoke("action_copy_files", { paths });
-export const issueDeleteToken = (paths: string[]): Promise<string> =>
-  invoke("action_issue_delete_token", { paths });
-export const actionRecycle = (paths: string[], token: string): Promise<PlanItem[]> =>
-  invoke("action_recycle", { request: { paths, token } });
-export const actionDeletePermanent = (paths: string[], token: string): Promise<PlanItem[]> =>
-  invoke("action_delete_permanent", { request: { paths, token } });
+/** 删除目标：稳定 ID + 当前路径，供后端双重校验（产品底线 3）。 */
+export interface DeleteTarget {
+  fileId: number;
+  path: string;
+}
+
+export const issueDeleteToken = (files: DeleteTarget[]): Promise<string> =>
+  invoke("action_issue_delete_token", { files });
+export const actionRecycle = (files: DeleteTarget[], token: string): Promise<PlanItem[]> =>
+  invoke("action_recycle", { request: { files, token } });
+export const actionDeletePermanent = (files: DeleteTarget[], token: string): Promise<PlanItem[]> =>
+  invoke("action_delete_permanent", { request: { files, token } });
 export const actionOpenWith = (path: string): Promise<string> => invoke("action_open_with", { path });
 export const actionProperties = (path: string): Promise<string> => invoke("action_properties", { path });
 export const actionOpenTerminal = (path: string): Promise<string> =>
@@ -175,15 +193,25 @@ export const actionOpenVscode = (path: string): Promise<string> =>
 export const actionRename = (oldPath: string, newName: string): Promise<string> =>
   invoke("action_rename", { oldPath, newName });
 
+/** 批量执行结果：聚合计数 + 逐项结果（底线 2：成功 / 跳过 / 失败可追溯）。 */
+export interface BatchExecuteResult {
+  ok: number;
+  failed: number;
+  skipped: number;
+  /** 仅批量重命名返回，供一次性撤销。 */
+  operationId?: number;
+  items: PlanItem[];
+}
+
 export const batchRenamePreview = (paths: string[], rule: unknown): Promise<PlanItem[]> =>
   invoke("batch_rename_preview", { request: { paths, rule } });
-export const batchRenameExecute = (items: PlanItem[]): Promise<{ ok: number; failed: number; skipped: number; operationId: number }> =>
+export const batchRenameExecute = (items: PlanItem[]): Promise<BatchExecuteResult> =>
   invoke("batch_rename_execute", { items });
 export const batchRenameUndo = (operationId: number): Promise<{ undone: number; conflicts: number }> =>
   invoke("batch_rename_undo", { operationId });
 export const batchMovePreview = (paths: string[], targetDir: string): Promise<PlanItem[]> =>
   invoke("batch_move_preview", { paths, targetDir });
-export const batchMoveExecute = (items: PlanItem[], conflict: string): Promise<{ ok: number; failed: number; skipped: number }> =>
+export const batchMoveExecute = (items: PlanItem[], conflict: string): Promise<BatchExecuteResult> =>
   invoke("batch_move_execute", { items, conflict });
 
 export const previewGet = (path: string): Promise<PreviewPayload> => invoke("preview_get", { path });
@@ -211,9 +239,15 @@ export interface StorageUsage {
   dataDir: string;
   dbBytes: number;
   indexBytes: number;
+  /** 旧数据目录（默认目录 ≠ 当前目录时存在），供提示清理。 */
+  legacyDir: string | null;
+  /** 旧数据目录中可清理的冗余占用（数据库 + 索引）。 */
+  legacyBytes: number;
 }
 
 export const storageUsage = (): Promise<StorageUsage> => invoke('storage_usage');
+/** 清理旧数据目录中的冗余（数据库 + 索引），返回释放的字节数。 */
+export const cleanupLegacyData = (): Promise<number> => invoke('cleanup_legacy_data');
 export const setDataDir = (newDir: string): Promise<void> => invoke('set_data_dir', { newDir });
 export const relaunchApp = (): Promise<void> => invoke('relaunch_app');
 

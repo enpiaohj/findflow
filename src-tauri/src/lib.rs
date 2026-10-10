@@ -27,10 +27,31 @@ pub mod updater_cmd;
 pub mod util;
 pub mod watcher;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+/// 主窗是否已首次自动显示。窗口配置为 `visible: false`，等首屏页面加载完成后再显示，
+/// 避免先显示空白 webview 造成白闪；开发热重载不应把用户已隐藏的窗口重新弹出，故只生效一次。
+static MAIN_SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// 开机自启：带 `--ff-autostart` 参数静默启动到托盘，不弹出主窗。
+fn is_autostart_launch() -> bool {
+    std::env::args().any(|arg| arg == "--ff-autostart")
+}
+
+/// 首次显示主窗（显示 + 聚焦）；已显示过或开机自启时不做任何事。
+fn show_main_once(app: &tauri::AppHandle) {
+    if is_autostart_launch() || MAIN_SHOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
 
 pub struct HotkeyState(pub std::sync::Mutex<String>);
 
@@ -94,17 +115,17 @@ pub fn run() {
                 })
                 .build(),
         )
-        .setup(|app| {
-            // 开机自启时静默启动到托盘；正常启动立即显示主窗
-            let autostart_launch = std::env::args().any(|arg| arg == "--ff-autostart");
-            if let Some(w) = app.get_webview_window("main") {
-                if autostart_launch {
-                    let _ = w.hide();
-                } else {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
+        // 首屏加载完成后再显示主窗，避免空白 webview 的白闪；
+        // 开机自启（--ff-autostart）只驻留托盘，不自动弹出。
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
+                show_main_once(webview.app_handle());
             }
+        })
+        .setup(|app| {
+            // 窗口保持隐藏，等首屏加载完成后由 on_page_load 显示
 
             let default_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&default_dir)?;
@@ -118,13 +139,26 @@ pub fn run() {
                     } else {
                         let _ = std::fs::create_dir_all(&p);
                         if default_dir.join("findflow.db").exists() && !p.join("findflow.db").exists() {
+                            let mut migrated = true;
                             for suffix in ["", "-wal", "-shm"] {
                                 let from = default_dir.join(format!("findflow.db{}", suffix));
-                                if from.exists() {
-                                    let _ = std::fs::copy(&from, p.join(format!("findflow.db{}", suffix)));
+                                if from.exists()
+                                    && std::fs::copy(&from, p.join(format!("findflow.db{}", suffix))).is_err()
+                                {
+                                    migrated = false;
                                 }
                             }
-                            tracing::info!("数据库已迁移至 {:?}", p);
+                            if migrated {
+                                // 迁移成功后删除旧库，避免旧数据目录长期残留（曾造成 GB 级冗余）。
+                                // 索引与日志不迁移：索引在新位置重建，日志继续写新位置。
+                                for suffix in ["", "-wal", "-shm"] {
+                                    let _ = std::fs::remove_file(default_dir.join(format!("findflow.db{suffix}")));
+                                }
+                                let _ = std::fs::remove_dir_all(default_dir.join("index"));
+                                tracing::info!("数据库已迁移至 {:?}，旧库文件已清理", p);
+                            } else {
+                                tracing::warn!("数据库迁移未完成，保留旧文件以便重试");
+                            }
                         }
                         p
                     }
@@ -273,6 +307,14 @@ pub fn run() {
             // 系统托盘：左键呼出主窗，右键菜单提供「显示 FindFlow」「退出」——
             // 关闭按钮只隐藏窗口，退出由此入口承担
             tray::build(app.handle(), show_tray)?;
+
+            // 自动定期校准：网络共享范围不做实时监听，只能靠校准保持同步；
+            // 本地范围也借此兜住监听遗漏（休眠、快速改动等）。可在设置中关闭。
+            scanner::start_auto_calibrate(app.handle().clone());
+
+            // 自动正文抽取：默认关闭（待抽取量可达 27 万文件 / 54 GB，需数小时读盘），
+            // 由用户在设置中开启后才在后台逐步建立正文索引。
+            extract::start_auto_fulltext(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -321,6 +363,7 @@ pub fn run() {
             analysis::large_files,
             analysis::start_duplicates_cmd,
             analysis::organize_suggest,
+            analysis::organize_issue_token,
             analysis::organize_execute,
             analysis::similar_images,
             actions::action_open,
@@ -366,6 +409,7 @@ pub fn run() {
             updater_cmd::updater_install,
             hotkey::hotkey_apply,
             storage_cmd::storage_usage,
+            storage_cmd::cleanup_legacy_data,
             storage_cmd::set_data_dir,
             storage_cmd::relaunch_app,
         ])
@@ -383,6 +427,10 @@ pub mod storage_cmd {
         pub data_dir: String,
         pub db_bytes: u64,
         pub index_bytes: u64,
+        /// 旧数据目录（默认数据目录 ≠ 当前数据目录时存在），用于提示清理。
+        pub legacy_dir: Option<String>,
+        /// 旧数据目录中可清理的冗余占用（数据库 + 索引，不含 llm.key 与日志）。
+        pub legacy_bytes: u64,
     }
 
     fn dir_size(p: &std::path::Path) -> u64 {
@@ -399,9 +447,30 @@ pub mod storage_cmd {
         sum
     }
 
-    /// 当前生效数据目录的占用（数据库含 WAL + 索引目录）。
+    /// 旧数据目录中可安全清理的占用：数据库三件套 + 索引目录。
+    /// 不含 `llm.key`（当前生效的密钥）、`logs/` 与 `storage-location.txt`。
+    fn legacy_cleanable_bytes(dir: &std::path::Path) -> u64 {
+        let mut sum = 0u64;
+        for name in ["findflow.db", "findflow.db-wal", "findflow.db-shm"] {
+            sum += std::fs::metadata(dir.join(name)).map(|m| m.len()).unwrap_or(0);
+        }
+        sum + dir_size(&dir.join("index"))
+    }
+
+    /// 默认数据目录：当它不同于当前生效目录时，其中的数据库与索引即旧数据残留。
+    fn legacy_dir_of(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let default_dir = app.path().app_data_dir().ok()?;
+        let same = dunce::simplified(&default_dir) == dunce::simplified(data_dir);
+        if same || !default_dir.join("findflow.db").exists() {
+            return None;
+        }
+        Some(default_dir)
+    }
+
+    /// 当前生效数据目录的占用（数据库含 WAL + 索引目录），并报告旧数据目录残留。
     #[tauri::command]
     pub async fn storage_usage(
+        app: tauri::AppHandle,
         state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     ) -> Result<StorageUsage, String> {
         let dir = state.data_dir.clone();
@@ -411,14 +480,48 @@ pub mod storage_cmd {
                     .map(|m| m.len())
                     .unwrap_or(0)
             };
+            let legacy = legacy_dir_of(&app, &dir);
+            let legacy_bytes = legacy.as_ref().map(|d| legacy_cleanable_bytes(d)).unwrap_or(0);
             StorageUsage {
                 data_dir: dir.to_string_lossy().to_string(),
                 db_bytes: file_len("findflow.db") + file_len("findflow.db-wal"),
                 index_bytes: dir_size(&dir.join("index")),
+                legacy_dir: legacy.map(|d| d.to_string_lossy().to_string()),
+                legacy_bytes,
             }
         })
         .await
         .map_err(|e| e.to_string())
+    }
+
+    /// 清理旧数据目录中的冗余（数据库三件套 + 索引），保留 llm.key、日志与指针文件。
+    /// 仅清理「默认数据目录 ≠ 当前生效目录」时的残留；当前生效目录永不被清理。
+    #[tauri::command]
+    pub async fn cleanup_legacy_data(
+        app: tauri::AppHandle,
+        state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    ) -> Result<u64, String> {
+        let dir = state.data_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let Some(legacy) = legacy_dir_of(&app, &dir) else {
+                return Ok(0u64);
+            };
+            let freed = legacy_cleanable_bytes(&legacy);
+            for name in ["findflow.db", "findflow.db-wal", "findflow.db-shm"] {
+                let f = legacy.join(name);
+                if f.exists() {
+                    std::fs::remove_file(&f).map_err(|e| format!("删除 {name} 失败：{e}"))?;
+                }
+            }
+            let idx = legacy.join("index");
+            if idx.exists() {
+                std::fs::remove_dir_all(&idx).map_err(|e| format!("删除旧索引失败：{e}"))?;
+            }
+            tracing::info!("已清理旧数据目录残留：{:?}（释放 {} 字节）", legacy, freed);
+            Ok(freed)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     /// 更改存储位置：写入指针文件，重启后自动迁移数据库并重建索引。

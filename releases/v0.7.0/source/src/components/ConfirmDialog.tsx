@@ -1,0 +1,60 @@
+import { useEffect, useState } from "react";
+
+interface ConfirmState {
+  message: string;
+  sub?: string;
+  resolve: (ok: boolean) => void;
+}
+
+/** 应用内确认框：替代原生 window.confirm，风格与整体一致。 */
+export function useConfirm() {
+  const [state, setState] = useState<ConfirmState | null>(null);
+
+  useEffect(() => {
+    if (!state) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        state.resolve(false);
+        setState(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state]);
+
+  const confirm = (message: string, sub?: string) =>
+    new Promise<boolean>((resolve) => setState({ message, sub, resolve }));
+
+  const confirmEl = state ? (
+    <div className="confirm-overlay">
+      <div className="confirm-panel" role="dialog" aria-modal="true">
+        <p className="confirm-msg">{state.message}</p>
+        {state.sub ? <p className="muted">{state.sub}</p> : null}
+        <div className="confirm-actions">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              state.resolve(false);
+              setState(null);
+            }}
+          >
+            取消
+          </button>
+          <button
+            className="btn-primary"
+            autoFocus
+            onClick={() => {
+              state.resolve(true);
+              setState(null);
+            }}
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  return { confirm, confirmEl };
+}

@@ -38,13 +38,25 @@ pub fn kind_from(ext: &str, is_dir: bool) -> &'static str {
         return "folder";
     }
     match ext.to_ascii_lowercase().as_str() {
-        "doc" | "docx" | "txt" | "md" | "rtf" | "vsd" | "vsdx" | "html" | "htm" | "log" => "doc",
-        "xls" | "xlsx" | "csv" | "ods" => "sheet",
+        "doc" | "docx" | "docm" | "dot" | "dotx" | "odt" | "wps" | "pages" | "txt" | "md" | "rtf"
+        | "tex" | "epub" | "mht" | "mhtml" | "vsd" | "vsdx" | "html" | "htm" | "log" => "doc",
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "et" | "numbers" | "csv" | "tsv" | "ods" => "sheet",
         "pdf" => "pdf",
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" | "tif" | "tiff" => "image",
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" => "video",
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "audio",
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => "archive",
+        "png" | "jpg" | "jpeg" | "jfif" | "jpe" | "jp2" | "gif" | "bmp" | "webp" | "svg" | "ico"
+        | "tif" | "tiff" | "heic" | "heif" | "avif" | "psd" | "cr2" | "nef" | "arw" | "dng" => {
+            "image"
+        }
+        // 视频：不含 `.ts` / `.mts`——这两个扩展名在开发机上绝大多数是 TypeScript
+        // 源码与声明文件（`.d.mts`），归为视频会大面积误分类（实测本机 2825 个 .mts）。
+        // MPEG 传输流用 `.m2ts` 覆盖。
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
+        | "rmvb" | "rm" | "m2ts" | "m2v" | "3gp" | "3g2" | "vob" | "asf" | "f4v" | "divx" | "ogv"
+        | "mxf" => "video",
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "oga" | "m4a" | "m4b" | "wma" | "ape" | "opus"
+        | "aiff" | "aif" | "amr" | "mid" | "midi" | "ac3" | "dts" | "mka" | "caf" | "weba"
+        | "ra" => "audio",
+        "zip" | "rar" | "7z" | "tar" | "tgz" | "txz" | "gz" | "bz2" | "xz" | "zst" | "lz4"
+        | "lz" | "br" | "cab" | "iso" | "arj" | "lzh" => "archive",
         _ => "other",
     }
 }
@@ -52,6 +64,31 @@ pub fn kind_from(ext: &str, is_dir: bool) -> &'static str {
 /// 归一化为不带 `\\?\` 前缀的常规路径，供显示与数据库存储。
 pub fn normalize_path(p: &Path) -> String {
     dunce::simplified(p).to_string_lossy().replace('/', "\\")
+}
+
+/// 把可能含 8.3 短名（如 `PROGRA~1`）的路径解析为长名形式，供保护目录判断使用。
+/// 短名可绕过按段比对的 `is_protected`（`C:\PROGRA~1` 不等于 `Program Files`），
+/// 因此安全判定前必须先展开。解析失败（路径不存在、无权限、已是长名）时原样返回。
+pub fn to_long_path(p: &str) -> String {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    if p.is_empty() {
+        return p.to_string();
+    }
+    let wide: Vec<u16> = p.encode_utf16().chain(std::iter::once(0)).collect();
+    // 先问所需长度；返回 0 表示解析失败，直接用原值。
+    let need = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), None) };
+    if need == 0 {
+        return p.to_string();
+    }
+    let mut buf = vec![0u16; need as usize];
+    let written = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buf)) };
+    if written == 0 {
+        return p.to_string();
+    }
+    buf.truncate(written as usize);
+    String::from_utf16_lossy(&buf).replace('/', "\\")
 }
 
 /// 组合 `\\?\` 前缀的长路径，绕过 MAX_PATH 限制。
@@ -121,6 +158,37 @@ pub fn pinyin_full(name: &str) -> String {
     out
 }
 
+/// 开发目录 / 构建产物目录名（小写）。这些目录里几乎只有第三方依赖与编译产物，
+/// 不是用户文档，正文抽取跳过它们，避免把 node_modules 里的源码当文档索引。
+/// 名称索引不受影响——用户仍能按文件名搜到这些目录里的文件。
+const DEV_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".tox",
+    ".next",
+    ".nuxt",
+    ".cache",
+    ".gradle",
+    ".idea",
+    ".vs",
+    "target",
+    "dist",
+    "build",
+    "coverage",
+];
+
+/// 路径是否经过某个开发 / 构建目录（按完整路径段比对，避免误伤 `node_modules_notes` 这类名字）。
+pub fn is_dev_dir_path(path: &str) -> bool {
+    path.to_lowercase()
+        .split(['\\', '/'])
+        .any(|seg| DEV_DIRS.contains(&seg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +199,56 @@ mod tests {
         assert_eq!(kind_from("PDF", false), "pdf");
         assert_eq!(kind_from("", true), "folder");
         assert_eq!(kind_from("xyz", false), "other");
+    }
+
+    #[test]
+    fn audio_video_cover_common_extensions() {
+        // 「音乐」「视频」筛选要覆盖各来源的常见容器格式，缺一个就会漏文件
+        for e in [
+            "mp3", "wav", "flac", "aac", "ogg", "oga", "m4a", "wma", "ape", "opus", "aiff",
+            "aif", "m4b", "amr", "mid", "midi", "ac3", "dts", "mka", "caf", "weba", "ra",
+        ] {
+            assert_eq!(kind_from(e, false), "audio", "{e} 应归为 audio");
+        }
+        for e in [
+            "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "rmvb",
+            "rm", "m2ts", "m2v", "3gp", "3g2", "vob", "asf", "f4v", "divx", "ogv", "mxf",
+        ] {
+            assert_eq!(kind_from(e, false), "video", "{e} 应归为 video");
+        }
+        // `.ts` / `.mts` 不归视频：这两个扩展名绝大多数是 TypeScript 源码与声明文件
+        // （本机实测 .mts 有 2825 个，几乎全是 node_modules 里的 .d.mts）
+        assert_eq!(kind_from("ts", false), "other");
+        assert_eq!(kind_from("mts", false), "other");
+        // 大小写不敏感（扫描器传入的 ext 已小写，此处保证直接调用也正确）
+        assert_eq!(kind_from("MP3", false), "audio");
+        assert_eq!(kind_from("MKV", false), "video");
+    }
+
+    #[test]
+    fn document_kinds_cover_office_formats() {
+        // 「文档」筛选依赖这些扩展名归入 doc / sheet / pdf；
+        // 漏掉 xlsm / odt / wps 等会让对应文件在筛选时消失
+        for e in [
+            "doc", "docx", "docm", "dot", "dotx", "odt", "wps", "pages", "txt", "md", "rtf",
+            "tex", "epub", "mht", "mhtml", "vsd", "vsdx", "html", "htm", "log",
+        ] {
+            assert_eq!(kind_from(e, false), "doc", "{e} 应归为 doc");
+        }
+        for e in ["xls", "xlsx", "xlsm", "xlsb", "et", "numbers", "csv", "tsv", "ods"] {
+            assert_eq!(kind_from(e, false), "sheet", "{e} 应归为 sheet");
+        }
+        assert_eq!(kind_from("pdf", false), "pdf");
+        // 新增的图片 / 压缩包格式
+        for e in ["heic", "heif", "avif", "jfif", "jpe", "jp2", "psd", "cr2", "nef", "arw", "dng"] {
+            assert_eq!(kind_from(e, false), "image", "{e} 应归为 image");
+        }
+        for e in [
+            "zip", "rar", "7z", "tar", "tgz", "txz", "gz", "bz2", "xz", "zst", "lz4", "lz",
+            "br", "cab", "iso", "arj", "lzh",
+        ] {
+            assert_eq!(kind_from(e, false), "archive", "{e} 应归为 archive");
+        }
     }
 
     #[test]
@@ -157,6 +275,22 @@ mod tests {
         assert!(is_under(r"d:\findflowdata\index\x", r"d:\findflowdata"));
         assert!(!is_under(r"d:\findflowdata2\x", r"d:\findflowdata"));
         assert!(!is_under(r"d:\find", r"d:\findflowdata"));
+    }
+
+    #[test]
+    fn dev_dir_detection_matches_path_segments_only() {
+        // 命中开发 / 构建目录
+        assert!(is_dev_dir_path(r"D:\p\node_modules\lucide-react\a.js"));
+        assert!(is_dev_dir_path(r"D:\p\.git\objects\x"));
+        assert!(is_dev_dir_path(r"D:\p\src-tauri\target\debug\x.pdb"));
+        assert!(is_dev_dir_path("D:/p/dist/index.js"));
+        assert!(is_dev_dir_path(r"D:\p\__pycache__\a.pyc"));
+        assert!(is_dev_dir_path(r"D:\NODE_MODULES\a.js"), "大小写不敏感");
+        // 只是名字里含关键词的普通目录不受影响（按完整段比对）
+        assert!(!is_dev_dir_path(r"D:\p\node_modules_notes\a.txt"));
+        assert!(!is_dev_dir_path(r"D:\p\targets\a.txt"));
+        assert!(!is_dev_dir_path(r"D:\我的文档\dist报告\a.docx"));
+        assert!(!is_dev_dir_path(r"D:\p\src\a.rs"));
     }
 
     #[test]

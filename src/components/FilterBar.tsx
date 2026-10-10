@@ -5,6 +5,8 @@ export const FILTERS = [
   { id: "document", label: "文档" },
   { id: "folder", label: "文件夹" },
   { id: "image", label: "图片" },
+  { id: "audio", label: "音乐" },
+  { id: "video", label: "视频" },
   { id: "recent", label: "最近" },
 ] as const;
 
@@ -23,10 +25,15 @@ interface Props {
   onFilterChange: (filter: FilterId) => void;
   density: Density;
   onDensityChange: (density: Density) => void;
-  /** 结果条数；空搜索隐藏结果时不传，不显示计数 */
+  /** 命中总数（有查询条件时为真实命中数，空搜索浏览时为索引总数） */
   count?: number;
   /** 结果达到返回上限（实际命中可能更多） */
   limited?: boolean;
+  /** 是否带查询条件（关键词或筛选）：带条件时计数是「命中 N 项」，否则是浏览范围的「共 N 项」，
+   *  与状态栏「索引 N 条」（索引总量）区分开 */
+  filtered?: boolean;
+  /** 本次实际列出的条数；仅在 truncated 时用于说明「共 N 项 · 显示前 M 项」 */
+  shown?: number;
 }
 
 export default function FilterBar({
@@ -36,7 +43,10 @@ export default function FilterBar({
   onDensityChange,
   count,
   limited,
+  filtered,
+  shown,
 }: Props) {
+  const noun = filtered ? "命中" : "共";
   return (
     <div className="filterbar">
       <div className="filterbar-chips">
@@ -54,9 +64,15 @@ export default function FilterBar({
         {count === undefined ? null : (
           <span
             className="filterbar-count"
-            title={limited ? "仅显示最相关的前若干项，可继续输入缩小范围" : undefined}
+            title={
+              limited
+                ? `共命中 ${count.toLocaleString()} 项，此处仅列出最相关的前 ${(shown ?? count).toLocaleString()} 项，可继续输入缩小范围`
+                : undefined
+            }
           >
-            {limited ? `前 ${count} 项` : `共 ${count} 项`}
+            {limited && shown !== undefined
+              ? `${noun} ${count.toLocaleString()} 项 · 显示前 ${shown.toLocaleString()}`
+              : `${noun} ${count.toLocaleString()} 项`}
           </span>
         )}
         <div className="density-switch" role="group" aria-label="显示密度">

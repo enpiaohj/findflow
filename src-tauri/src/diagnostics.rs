@@ -61,7 +61,8 @@ fn compute_health(db: &crate::settings::DbHandle) -> Result<IndexHealth, String>
         let h = heavy.as_ref().unwrap();
         let pending: i64 = c
             .query_row(
-                "SELECT COUNT(*) FROM index_outbox WHERE state='pending'",
+                // applied = 已写入 writer 但尚未提交，同样还没落盘，一并计入待处理
+                "SELECT COUNT(*) FROM index_outbox WHERE state IN ('pending','applied')",
                 [],
                 |r| r.get(0),
             )

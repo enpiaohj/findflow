@@ -21,13 +21,23 @@ impl DbHandle {
 /// 全局设置存储：key -> JSON 值，SQLite 单连接互斥复用。
 pub struct SettingsStore {
     conn: Mutex<Connection>,
+    /// 实例唯一标识：供进程级缓存（如索引总数）区分不同数据库，
+    /// 避免同一进程内多个库（测试内存库、切换数据目录）互相命中缓存。
+    id: usize,
 }
 
 impl SettingsStore {
     pub fn new(conn: Connection) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
         Self {
             conn: Mutex::new(conn),
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// 本实例的唯一标识，用于区分不同数据库的缓存条目。
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     pub fn get(&self, key: &str) -> Result<Option<Value>, rusqlite::Error> {

@@ -13,11 +13,13 @@ import {
   recalibrateScope,
   rebuildScope,
   storageUsage,
+  cleanupLegacyData,
   setDataDir,
   relaunchApp,
   formatBytes,
   diagnosticsHealth,
   type ScopeInfo,
+  type StorageUsage,
 } from "../../api";
 
 interface TrialScanResultLike {
@@ -45,7 +47,7 @@ export default function IndexPage({ notice }: PageCtx) {
   } | null>(null);
   const [trial, setTrial] = useState<TrialScanResultLike | null>(null);
   const [busy, setBusy] = useState(false);
-  const [usage, setUsage] = useState<{ dataDir: string; dbBytes: number; indexBytes: number } | null>(null);
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [excludeEdit, setExcludeEdit] = useState<{
     scopeId: number;
     dirs: string;
@@ -332,9 +334,13 @@ export default function IndexPage({ notice }: PageCtx) {
             onClick={async () => {
               const d = await open({ directory: true, multiple: false });
               if (typeof d === 'string') {
+                if (d === usage?.dataDir) {
+                  notice('新位置与当前存储位置相同，无需迁移');
+                  return;
+                }
                 try {
                   await setDataDir(d);
-                  notice('存储位置已保存，重启应用后自动迁移数据');
+                  notice('存储位置已保存，重启应用后自动迁移数据；旧位置的数据库与索引将被清理');
                 } catch (e) {
                   notice(String(e));
                 }
@@ -346,13 +352,36 @@ export default function IndexPage({ notice }: PageCtx) {
         </div>
         <p className="muted">{usage?.dataDir ?? '读取中…'}</p>
         <p className="muted">数据库 {formatBytes(usage?.dbBytes ?? 0)} · 倒排索引 {formatBytes(usage?.indexBytes ?? 0)}</p>
-        <p className="muted">更改后重启应用：数据库自动迁移到新位置，索引在新位置重建。</p>
+        <p className="muted">更改后重启应用：数据库自动迁移到新位置，索引在新位置重建，旧位置残留会被自动清理。</p>
         <button
           className="btn-primary"
           onClick={() => relaunchApp().catch((err: unknown) => notice(String(err)))}
         >
           立即重启并迁移
         </button>
+        {usage?.legacyDir ? (
+          <div className="legacy-notice">
+            <p>
+              检测到旧数据目录仍有 <b>{formatBytes(usage.legacyBytes)}</b> 冗余（数据库与索引），
+              位于 <code>{usage.legacyDir}</code>。
+            </p>
+            <p className="muted">清理不会影响当前索引与你的 API Key（密钥文件保留）。</p>
+            <button
+              onClick={async () => {
+                if (!(await confirm(`清理旧数据目录中的 ${formatBytes(usage.legacyBytes)} 冗余？`, '仅删除旧数据库与旧索引，保留密钥与日志。'))) return;
+                try {
+                  const freed = await cleanupLegacyData();
+                  notice(`已清理旧数据，释放 ${formatBytes(freed)}`);
+                  storageUsage().then(setUsage).catch(() => undefined);
+                } catch (e) {
+                  notice(String(e));
+                }
+              }}
+            >
+              清理旧数据（释放 {formatBytes(usage.legacyBytes)}）
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {confirmEl}

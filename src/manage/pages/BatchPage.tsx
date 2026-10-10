@@ -9,6 +9,7 @@ import {
   batchMovePreview,
   batchMoveExecute,
   organizeSuggest,
+  organizeIssueToken,
   organizeExecute,
   type PlanItem,
 } from "../../api";
@@ -62,9 +63,10 @@ export default function BatchPage({ notice }: PageCtx) {
     if (!(await confirm(`确认重命名 ${okItems.length} 项？`, "问题项将跳过；完成后可一次性撤销。"))) return;
     batchRenameExecute(items)
       .then((r) => {
-        setLastOp(r.operationId);
+        if (r.operationId !== undefined) setLastOp(r.operationId);
         notice(`完成：成功 ${r.ok}，失败 ${r.failed}，跳过 ${r.skipped}`);
-        setItems([]);
+        // 保留逐项结果，失败项带原因，便于追溯（底线 2）
+        setItems(r.items);
       })
       .catch((e) => notice(String(e)));
   };
@@ -86,13 +88,41 @@ export default function BatchPage({ notice }: PageCtx) {
     batchMoveExecute(items, conflict)
       .then((r) => {
         notice(`完成：成功 ${r.ok}，失败 ${r.failed}，跳过 ${r.skipped}`);
-        setItems([]);
+        // 保留逐项结果，失败项带原因，便于追溯（底线 2）
+        setItems(r.items);
       })
       .catch((e) => notice(String(e)));
   };
 
   const statusBadge = (s: string) =>
-    s === "ok" ? "badge-ok" : s === "conflict" ? "badge-warn" : s === "illegal" ? "badge-err" : "badge-muted";
+    s === "ok"
+      ? "badge-ok"
+      : s === "conflict" || s === "unchanged" || s === "skipped"
+        ? "badge-warn"
+        : s === "illegal" || s === "protected" || s === "failed"
+          ? "badge-err"
+          : "badge-muted";
+
+  const statusLabel = (s: string) =>
+    s === "ok"
+      ? "可执行"
+      : s === "conflict"
+        ? "名称冲突"
+        : s === "illegal"
+          ? "非法字符"
+          : s === "unchanged"
+            ? "无变化"
+            : s === "protected"
+              ? "受保护"
+              : s === "missing"
+                ? "源不存在"
+                : s === "stale"
+                  ? "目标已变更"
+                  : s === "failed"
+                    ? "失败"
+                    : s === "skipped"
+                      ? "已跳过"
+                      : s;
 
   return (
     <div className="page">
@@ -177,20 +207,15 @@ export default function BatchPage({ notice }: PageCtx) {
                     <tr key={i}>
                       <td>
                         <span className={"status-badge " + statusBadge(it.status)}>
-                          {it.status === "ok"
-                            ? "可执行"
-                            : it.status === "conflict"
-                              ? "名称冲突"
-                              : it.status === "illegal"
-                                ? "非法字符"
-                                : it.status === "unchanged"
-                                  ? "无变化"
-                                  : it.status}
+                          {statusLabel(it.status)}
                         </span>
                       </td>
                       <td>{it.oldPath.split("\\").pop()}</td>
                       <td className="muted">→</td>
-                      <td>{it.newPath.split("\\").pop()}</td>
+                      <td>
+                        {it.newPath.split("\\").pop()}
+                        {it.reason ? <span className="muted">（{it.reason}）</span> : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -201,7 +226,11 @@ export default function BatchPage({ notice }: PageCtx) {
                     撤销上一次批量重命名（#{lastOp}）
                   </button>
                 ) : null}
-                <button className="btn btn-primary" onClick={executeRename}>
+                <button
+                  className="btn btn-primary"
+                  onClick={executeRename}
+                  disabled={items.every((i) => i.status !== "ok")}
+                >
                   确认重命名 {items.filter((i) => i.status === "ok").length} 项
                 </button>
               </div>
@@ -235,7 +264,11 @@ export default function BatchPage({ notice }: PageCtx) {
           </label>
           <div className="trial-actions">
             <button onClick={previewMove}>预演</button>
-            <button className="btn btn-primary" onClick={executeMove}>
+            <button
+              className="btn btn-primary"
+              onClick={executeMove}
+              disabled={items.every((i) => i.status !== "ok")}
+            >
               确认移动 {items.filter((i) => i.status === "ok").length} 项
             </button>
           </div>
@@ -252,10 +285,13 @@ export default function BatchPage({ notice }: PageCtx) {
                 {items.map((it, i) => (
                   <tr key={i}>
                     <td>
-                      <span className={"status-badge " + statusBadge(it.status)}>{it.status}</span>
+                      <span className={"status-badge " + statusBadge(it.status)}>{statusLabel(it.status)}</span>
                     </td>
                     <td className="cell-path">{it.oldPath}</td>
-                    <td className="cell-path">{it.newPath}</td>
+                    <td className="cell-path">
+                      {it.newPath}
+                      {it.reason ? <span className="muted">（{it.reason}）</span> : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -306,9 +342,20 @@ export default function BatchPage({ notice }: PageCtx) {
                   return;
                 }
                 if (!(await confirm(`确认按建议移动 ${okItems.length} 项？`))) return;
-                organizeExecute(items)
-                  .then((r) => notice(`整理完成：成功 ${r.ok}，失败 ${r.failed}`))
-                  .catch((e) => notice(String(e)));
+                try {
+                  // 后端按参数重新生成计划，令牌绑定来源/规则/目标
+                  const token = await organizeIssueToken(orgSource, orgType, orgTarget);
+                  const r = await organizeExecute(orgSource, orgType, orgTarget, token);
+                  setItems(r);
+                  const failed = r.filter((i) => i.status !== "ok");
+                  notice(
+                    failed.length === 0
+                      ? `整理完成：成功 ${r.length} 项`
+                      : `整理完成：成功 ${r.length - failed.length} 项，${failed.length} 项未完成`
+                  );
+                } catch (e) {
+                  notice(String(e));
+                }
               }}
             >
               执行整理
@@ -316,8 +363,10 @@ export default function BatchPage({ notice }: PageCtx) {
           </div>
           {items.map((it, i) => (
             <div key={i} className="dup-file">
+              <span className={"status-badge " + statusBadge(it.status)}>{statusLabel(it.status)}</span>
               <span className="dup-name">{it.oldPath}</span>
               <span className="muted">→ {it.newPath}</span>
+              {it.reason ? <span className="muted">{it.reason}</span> : null}
             </div>
           ))}
         </section>

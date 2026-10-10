@@ -140,11 +140,23 @@ pub async fn action_open(app: tauri::AppHandle, path: String) -> Result<String, 
     Ok("已打开".into())
 }
 
+/// 在资源管理器中定位并选中该文件。
+///
+/// 不用 `explorer /select,<path>`：Explorer 会按逗号切分该参数，路径含逗号时
+/// （如 `报告, 终稿.docx`）被拆成两段、解析为不存在的路径，于是静默打开「文档」
+/// 目录而不是定位目标，用户只看到「定位没用」。这里改用系统 Shell API
+/// `SHOpenFolderAndSelectItems`——资源管理器自身用的就是它，逗号、空格与 UNC
+/// 路径都能正确处理，且会复用已打开的窗口。
 #[tauri::command]
-pub async fn action_locate(path: String) -> Result<String, String> {
-    std::process::Command::new("explorer")
-        .arg(format!("/select,{path}"))
-        .spawn()
+pub async fn action_locate(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    use tauri_plugin_opener::OpenerExt;
+    // 该 API 要求路径存在；文件已被移动或删除时给出明确提示，
+    // 而不是像 /select 那样悄悄打开一个无关目录。
+    if !Path::new(&path).exists() {
+        return Err("文件已不存在，可能已被移动或删除".into());
+    }
+    app.opener()
+        .reveal_item_in_dir(Path::new(&path))
         .map_err(|e| format!("定位失败：{e}"))?;
     Ok("已定位".into())
 }
@@ -256,10 +268,36 @@ fn item(path: &str, status: &str, reason: Option<String>) -> crate::models::Plan
     }
 }
 
+/// 删除目标：稳定 ID + 当前路径，供底线 3 双重校验。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTarget {
+    pub file_id: i64,
+    pub path: String,
+}
+
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteRequest {
-    pub paths: Vec<String>,
+    pub files: Vec<DeleteTarget>,
     pub token: String,
+}
+
+/// 底线 3：用稳定 ID 查库内当前路径，与传入路径比对。
+/// 路径不一致 = 目标已被替换；查不到 = 已从索引移除。两者都拒绝执行。
+pub(crate) fn verify_target(
+    db: &crate::settings::SettingsStore,
+    t: &DeleteTarget,
+) -> Result<(), String> {
+    let current: Option<String> = db.with_conn(|c| {
+        c.query_row("SELECT path FROM files WHERE file_id=?1", [t.file_id], |r| r.get(0))
+            .ok()
+    });
+    match current {
+        Some(p) if p == t.path => Ok(()),
+        Some(_) => Err("目标已变更，请重新确认".into()),
+        None => Err("目标已不在索引中，请刷新后重试".into()),
+    }
 }
 
 #[tauri::command]
@@ -267,22 +305,28 @@ pub async fn action_recycle(
     app: tauri::AppHandle,
     request: DeleteRequest,
 ) -> Result<Vec<crate::models::PlanItem>, String> {
-    if !verify_token(&request.token, &request.paths) {
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
+    let fp = delete_fingerprint(&request.files);
+    if !consume_token(&request.token, &fp) {
         return Err("删除确认令牌无效或已过期，请重新确认".into());
     }
     let mut results = Vec::new();
-    for p in &request.paths {
-        let target = Path::new(p);
+    for t in &request.files {
+        if let Err(reason) = verify_target(&state.db, t) {
+            results.push(item(&t.path, "stale", Some(reason)));
+            continue;
+        }
+        let target = Path::new(&t.path);
         if !target.exists() {
-            results.push(item(p, "missing", Some("目标不存在".into())));
+            results.push(item(&t.path, "missing", Some("目标不存在".into())));
             continue;
         }
         match trash::delete(target) {
             Ok(_) => {
-                results.push(item(p, "ok", None));
-                mark_deleted(&app, p);
+                results.push(item(&t.path, "ok", None));
+                mark_deleted(&app, &t.path);
             }
-            Err(e) => results.push(item(p, "failed", Some(e.to_string()))),
+            Err(e) => results.push(item(&t.path, "failed", Some(e.to_string()))),
         }
     }
     Ok(results)
@@ -293,14 +337,20 @@ pub async fn action_delete_permanent(
     app: tauri::AppHandle,
     request: DeleteRequest,
 ) -> Result<Vec<crate::models::PlanItem>, String> {
-    if !verify_token(&request.token, &request.paths) {
+    let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
+    let fp = delete_fingerprint(&request.files);
+    if !consume_token(&request.token, &fp) {
         return Err("删除确认令牌无效或已过期，请重新确认".into());
     }
     let mut results = Vec::new();
-    for p in &request.paths {
-        let target = Path::new(p);
+    for t in &request.files {
+        if let Err(reason) = verify_target(&state.db, t) {
+            results.push(item(&t.path, "stale", Some(reason)));
+            continue;
+        }
+        let target = Path::new(&t.path);
         if !target.exists() {
-            results.push(item(p, "missing", Some("目标不存在".into())));
+            results.push(item(&t.path, "missing", Some("目标不存在".into())));
             continue;
         }
         let r = if target.is_dir() {
@@ -310,33 +360,70 @@ pub async fn action_delete_permanent(
         };
         match r {
             Ok(_) => {
-                results.push(item(p, "ok", None));
-                mark_deleted(&app, p);
+                results.push(item(&t.path, "ok", None));
+                mark_deleted(&app, &t.path);
             }
-            Err(e) => results.push(item(p, "failed", Some(e.to_string()))),
+            Err(e) => results.push(item(&t.path, "failed", Some(e.to_string()))),
         }
     }
     Ok(results)
 }
 
+/// 删除请求指纹：逐项「fileId + 路径」拼接，令牌据此绑定具体目标。
+fn delete_fingerprint(files: &[DeleteTarget]) -> String {
+    let parts: Vec<String> = files
+        .iter()
+        .map(|f| format!("{}:{}", f.file_id, f.path))
+        .collect();
+    parts.join("\u{1}")
+}
+
 #[tauri::command]
-pub async fn action_issue_delete_token(paths: Vec<String>) -> Result<String, String> {
-    let token = uuid_simple();
+pub async fn action_issue_delete_token(files: Vec<DeleteTarget>) -> Result<String, String> {
+    issue_token(&delete_fingerprint(&files))
+}
+
+/// 请求指纹：用不可出现在路径或规则名中的分隔符拼接，供令牌绑定。
+/// 删除 → 逐项「fileId:path」；整理 → 「来源目录 / 规则 / 目标目录」。
+pub(crate) fn fingerprint(parts: &[&str]) -> String {
+    parts.join("\u{1}")
+}
+
+/// 签发一次性令牌（60 秒有效）。
+pub(crate) fn issue_token(fp: &str) -> Result<String, String> {
+    let token = new_token()?;
     let mut guard = TOKENS.lock().unwrap();
-    guard.push((token.clone(), paths.clone(), Instant::now()));
     guard.retain(|(_, _, t)| t.elapsed() < Duration::from_secs(60));
+    guard.push((token.clone(), fp.to_string(), Instant::now()));
     Ok(token)
 }
 
-fn verify_token(token: &str, paths: &[String]) -> bool {
+/// 校验并消费令牌：命中即移除，确保不可重放。
+pub(crate) fn consume_token(token: &str, fp: &str) -> bool {
     let mut guard = TOKENS.lock().unwrap();
     guard.retain(|(_, _, t)| t.elapsed() < Duration::from_secs(60));
-    guard
-        .iter()
-        .any(|(t, ps, _)| t == token && ps.len() == paths.len() && ps.iter().zip(paths).all(|(a, b)| a == b))
+    let Some(pos) = guard.iter().position(|(t, f, _)| t == token && f == fp) else {
+        return false;
+    };
+    guard.remove(pos);
+    true
 }
 
-static TOKENS: Mutex<Vec<(String, Vec<String>, Instant)>> = Mutex::new(Vec::new());
+/// 密码学安全随机令牌（BCryptGenRandom，系统首选 RNG），256 位十六进制。
+fn new_token() -> Result<String, String> {
+    use windows::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+    let mut buf = [0u8; 32];
+    // halgorithm 传 None 即使用系统首选 RNG。
+    let status = unsafe { BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    if status.is_err() {
+        return Err("生成确认令牌失败".into());
+    }
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+static TOKENS: Mutex<Vec<(String, String, Instant)>> = Mutex::new(Vec::new());
 
 #[tauri::command]
 pub async fn action_open_with(path: String) -> Result<String, String> {
@@ -370,11 +457,21 @@ pub async fn action_open_terminal(path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn action_open_vscode(path: String) -> Result<String, String> {
-    std::process::Command::new("cmd")
-        .args(["/C", "code", &path])
-        .spawn()
-        .map(|_| "已在 VS Code 打开".to_string())
-        .map_err(|_| "未检测到 code 命令，请安装 VS Code 并加入 PATH".into())
+    // 必须等 cmd 结束并看退出码：spawn() 只要 cmd.exe 存在就成功，而 `code`
+    // 缺失时失败发生在 cmd 内部，原先只看 spawn 会把失败一律报成「已在 VS Code 打开」。
+    // code 是 .cmd 批处理，无法由 CreateProcessW 直接按 PATH 解析，故仍经 cmd 调用。
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("cmd")
+            .args(["/C", "code", &path])
+            .status()
+    })
+    .await
+    .map_err(|e| format!("无法启动 VS Code：{e}"))?
+    .map_err(|e| format!("无法启动 VS Code：{e}"))?;
+    if !status.success() {
+        return Err("未检测到 code 命令，请安装 VS Code 并加入 PATH".into());
+    }
+    Ok("已在 VS Code 打开".into())
 }
 
 #[tauri::command]
@@ -392,24 +489,58 @@ pub async fn action_rename(
     if new_path.exists() {
         return Err("目标名称已存在".into());
     }
+    // 必须在 rename 之前判断：rename 之后旧路径已不存在，is_dir 恒为 false
+    let was_dir = old.is_dir();
     std::fs::rename(old, &new_path).map_err(|e| format!("重命名失败：{e}"))?;
     let new_s = util::normalize_path(&new_path);
     let state: tauri::State<std::sync::Arc<crate::AppState>> = app.state();
-    state.db.with_conn(|c| {
-        c.execute(
-            "UPDATE files SET path=?2, name=?3, updated_ms=?4 WHERE path=?1",
-            params![old_path, new_s, name, util::now_ms()],
-        )
+    state
+        .db
+        .with_conn(|c| {
+            rename_db_rows(c, &old_path, &new_s, name, was_dir);
+            Ok::<(), String>(())
+        })
         .ok();
-        c.execute(
-            "INSERT INTO index_outbox(file_id, operation, created_ms)
-             SELECT file_id, 'upsert', ?2 FROM files WHERE path=?1",
-            params![new_s, util::now_ms()],
-        )
-        .ok();
-        Ok::<(), String>(())
-    }).ok();
     Ok(new_s)
+}
+
+/// 重命名后同步数据库。
+///
+/// 目录重命名时子树路径要整体替换前缀：漏掉这步会让目录内所有文件在库里保留旧路径，
+/// 搜索命中后打开与定位都会指向不存在的位置（watcher.rs 的目录重命名处理与此一致）。
+/// 子项文件名不变，故无需重建索引文档。
+///
+/// 单独抽出是因为 `action_rename` 需要 `AppHandle`，无法直接单测。
+fn rename_db_rows(
+    c: &rusqlite::Connection,
+    old_path: &str,
+    new_path: &str,
+    name: &str,
+    was_dir: bool,
+) {
+    let now = util::now_ms();
+    c.execute(
+        "UPDATE files SET path=?2, name=?3, updated_ms=?4 WHERE path=?1",
+        params![old_path, new_path, name, now],
+    )
+    .ok();
+    if was_dir {
+        let (lo, hi) = util::subtree_bounds(old_path);
+        c.execute(
+            "UPDATE files SET path = ?1 || substr(path, length(?2) + 1),
+                              parent_path = ?1 || substr(parent_path, length(?2) + 1),
+                              updated_ms = ?5
+             WHERE path>=?3 AND path<?4",
+            params![new_path, old_path, lo, hi, now],
+        )
+        .ok();
+    }
+    c.execute(
+        "INSERT INTO index_outbox(file_id, operation, created_ms)
+         SELECT file_id, 'upsert', ?2 FROM files WHERE path=?1",
+        params![new_path, now],
+    )
+    .ok();
 }
 
 fn shell_invoke(path: &str, verb: &str) -> Result<(), String> {
@@ -474,11 +605,170 @@ fn mark_deleted(app: &tauri::AppHandle, path: &str) {
         .ok();
 }
 
-fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{t:x}")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> crate::settings::SettingsStore {
+        crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap())
+    }
+
+    #[test]
+    fn token_is_random_and_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let t = new_token().unwrap();
+            assert_eq!(t.len(), 64, "256 位应为 64 个十六进制字符");
+            assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(seen.insert(t), "令牌必须互不相同");
+        }
+    }
+
+    #[test]
+    fn consume_token_rejects_replay() {
+        let fp = fingerprint(&["D:\\下载", "extension", "D:\\整理"]);
+        let token = issue_token(&fp).unwrap();
+        assert!(consume_token(&token, &fp), "首次消费应成功");
+        assert!(!consume_token(&token, &fp), "同一令牌不可重放");
+    }
+
+    #[test]
+    fn consume_token_rejects_mismatch() {
+        let fp = fingerprint(&["D:\\下载", "extension", "D:\\整理"]);
+        let token = issue_token(&fp).unwrap();
+        // 指纹不符（换了目标目录）→ 拒绝，且不消费
+        assert!(!consume_token(
+            &token,
+            &fingerprint(&["D:\\下载", "extension", "D:\\其它"])
+        ));
+        // 原指纹仍可用
+        assert!(consume_token(&token, &fp));
+    }
+
+    #[test]
+    fn delete_fingerprint_binds_id_and_path() {
+        let a = DeleteTarget { file_id: 1, path: "D:\\a.txt".into() };
+        let b = DeleteTarget { file_id: 2, path: "D:\\a.txt".into() };
+        let c = DeleteTarget { file_id: 1, path: "D:\\b.txt".into() };
+        let fp = delete_fingerprint(std::slice::from_ref(&a));
+        assert_ne!(fp, delete_fingerprint(std::slice::from_ref(&b)), "fileId 变化应改变指纹");
+        assert_ne!(fp, delete_fingerprint(std::slice::from_ref(&c)), "路径变化应改变指纹");
+        let both = delete_fingerprint(&[a.clone(), b.clone()]);
+        assert_ne!(both, delete_fingerprint(&[b, a]), "顺序应影响指纹");
+    }
+
+    #[test]
+    fn verify_target_detects_replacement() {
+        let s = store();
+        s.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1,'D:\\s','now')",
+                [],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO files(file_id, scope_id, name, path, ext, kind, size, is_dir, updated_ms)
+                 VALUES (7, 1, 'a.txt', 'D:\\s\\a.txt', 'txt', 'doc', 1, 0, 1)",
+                [],
+            )
+            .unwrap();
+            Ok::<(), String>(())
+        })
+        .unwrap();
+
+        // 路径一致 → 通过
+        let ok = DeleteTarget { file_id: 7, path: "D:\\s\\a.txt".into() };
+        assert!(verify_target(&s, &ok).is_ok());
+
+        // 同一 fileId 但路径已变（目标被替换）→ 拒绝
+        let moved = DeleteTarget { file_id: 7, path: "D:\\s\\renamed.txt".into() };
+        assert!(verify_target(&s, &moved).is_err());
+
+        // fileId 不在索引中 → 拒绝
+        let gone = DeleteTarget { file_id: 999, path: "D:\\s\\a.txt".into() };
+        assert!(verify_target(&s, &gone).is_err());
+    }
+
+    /// 往库里塞一批行（scope 1），模拟一个已建索引的目录树。
+    /// 入参：(名称, 完整路径, 父目录, 是否目录)。
+    fn seed(s: &crate::settings::SettingsStore, rows: &[(&str, &str, &str, bool)]) {
+        s.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1,'D:\\s','now')",
+                [],
+            )
+            .unwrap();
+            for (name, path, parent, is_dir) in rows {
+                c.execute(
+                    "INSERT INTO files(scope_id, parent_path, name, path, ext, kind, size, is_dir, updated_ms)
+                     VALUES (1, ?1, ?2, ?3, '', ?4, 1, ?5, 1)",
+                    params![
+                        parent,
+                        name,
+                        path,
+                        if *is_dir { "folder" } else { "doc" },
+                        *is_dir as i64
+                    ],
+                )
+                .unwrap();
+            }
+            Ok::<(), String>(())
+        })
+        .unwrap();
+    }
+
+    fn path_of(c: &rusqlite::Connection, name: &str) -> String {
+        c.query_row("SELECT path FROM files WHERE name=?1", [name], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn rename_directory_updates_descendant_paths() {
+        let s = store();
+        seed(
+            &s,
+            &[
+                ("旧名", r"D:\s\旧名", r"D:\s", true),
+                ("a.txt", r"D:\s\旧名\a.txt", r"D:\s\旧名", false),
+                ("b.txt", r"D:\s\旧名\sub\b.txt", r"D:\s\旧名\sub", false),
+                // 前缀相似但不是子树的兄弟目录，不得被改写
+                ("c.txt", r"D:\s\旧名字典\c.txt", r"D:\s\旧名字典", false),
+            ],
+        );
+        s.with_conn(|c| {
+            rename_db_rows(c, r"D:\s\旧名", r"D:\s\新名", "新名", true);
+            assert_eq!(path_of(c, "新名"), r"D:\s\新名");
+            assert_eq!(path_of(c, "a.txt"), r"D:\s\新名\a.txt");
+            // 多级子目录同样跟随
+            assert_eq!(path_of(c, "b.txt"), r"D:\s\新名\sub\b.txt");
+            // 前缀相似的兄弟目录不得被误改
+            assert_eq!(path_of(c, "c.txt"), r"D:\s\旧名字典\c.txt");
+            let parent: String = c
+                .query_row("SELECT parent_path FROM files WHERE name='a.txt'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(parent, r"D:\s\新名");
+            Ok::<(), String>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rename_file_leaves_siblings_untouched() {
+        let s = store();
+        seed(
+            &s,
+            &[
+                ("a.txt", r"D:\s\a.txt", r"D:\s", false),
+                ("a.txt.bak", r"D:\s\a.txt.bak", r"D:\s", false),
+            ],
+        );
+        s.with_conn(|c| {
+            // 重命名单个文件（非目录）不得触发子树前缀替换
+            rename_db_rows(c, r"D:\s\a.txt", r"D:\s\z.txt", "z.txt", false);
+            assert_eq!(path_of(c, "z.txt"), r"D:\s\z.txt");
+            assert_eq!(path_of(c, "a.txt.bak"), r"D:\s\a.txt.bak");
+            Ok::<(), String>(())
+        })
+        .unwrap();
+    }
 }

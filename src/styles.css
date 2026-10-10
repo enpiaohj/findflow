@@ -487,7 +487,9 @@ textarea {
 
 .filterbar-chips {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .chip {
@@ -601,29 +603,77 @@ textarea {
   padding: 0 8px 6px;
 }
 
-/* 列宽：名称 / 路径 / 修改时间 / 大小 / 操作，标题行与数据行共用 */
-.col-name {
-  flex: 1 1 38%;
+/* 列宽：名称 / 路径 / 修改时间 / 大小 / 操作，标题行与数据行共用。
+   紧凑模式下列宽由拖拽决定（--col-* 变量下发）；舒适模式无表头，名称列仍自适应撑满。 */
+.result-header .col-name,
+.row-compact .col-name {
+  flex: 0 1 var(--col-name, 320px);
   min-width: 0;
 }
 
-.col-path {
-  flex: 1 1 30%;
+.result-header .col-path,
+.row-compact .col-path {
+  flex: 0 1 var(--col-path, 260px);
   min-width: 0;
 }
 
-.col-modified {
-  flex: 0 0 128px;
+.result-header .col-modified,
+.row-compact .col-modified {
+  flex: 0 0 var(--col-modified, 128px);
 }
 
-.col-size {
-  flex: 0 0 70px;
+.result-header .col-size,
+.row-compact .col-size {
+  flex: 0 0 var(--col-size, 70px);
   text-align: right;
   justify-content: flex-end;
 }
 
+/* 舒适模式：无表头可拖拽，名称列撑满剩余空间 */
+.row-comfortable .col-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .col-actions {
   flex: 0 0 100px;
+}
+
+/* 列宽拖拽手柄：贴在表头单元格右缘，命中区跨过列间距便于抓取。
+   常驻显示一条淡分隔线标示列边界，悬停/拖拽时高亮加粗。 */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  width: 12px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 3;
+}
+
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 5px;
+  width: 1px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  transition: background 120ms ease, width 120ms ease, left 120ms ease;
+}
+
+.col-resizer:hover::after,
+.col-resizer:active::after {
+  left: 4px;
+  width: 3px;
+  background: var(--accent);
+}
+
+/* 拖拽期间：整窗口保持列宽光标并禁止选中文本 */
+body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .result-header {
@@ -646,6 +696,7 @@ textarea {
   align-items: center;
   gap: 3px;
   white-space: nowrap;
+  position: relative;
 }
 
 .result-header .col-name {
@@ -985,19 +1036,32 @@ textarea {
 .footerbar {
   height: 36px;
   flex-shrink: 0;
+  /* 空搜索隐藏结果列表时没有 flex:1 的列表撑开，靠它把状态栏钉在窗口底部 */
+  margin-top: auto;
   border-top: 1px solid var(--divider);
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
   padding: 0 18px;
   font-size: 12px;
   color: var(--text-secondary);
+  overflow: hidden;
 }
 
 .footerbar-hints {
   display: flex;
   align-items: center;
   gap: 4px;
+  /* 提示很短，不参与收缩：宽度不足时由路径区先让位 */
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.footerbar-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .footerbar-status {
@@ -1005,6 +1069,65 @@ textarea {
   color: var(--text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* 选中项完整路径：标签 + 路径。结果列的路径列受列宽限制会被截断，
+   状态栏补上完整路径（与 Everything 一致）。 */
+.footerbar-path-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 空间不足时路径区先收缩，大小 / 时间与索引计数保持完整 */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.footerbar-path-label {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* 过窄时从**左侧**省略，优先保留文件名与近层目录 */
+.footerbar-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+/* 完整路径提示：fixed 定位不受状态栏 overflow 裁剪；长路径按字符换行，限宽不出窗口 */
+.footerbar-tip {
+  position: fixed;
+  left: 18px;
+  bottom: 42px;
+  max-width: calc(100vw - 36px);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary, var(--text-secondary));
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
+  pointer-events: none;
+  z-index: 50;
+}
+
+/* 无选中项的提示：淡色，且路径提示按正常方向从右侧省略 */
+.footerbar-path.idle,
+.footerbar-meta.idle {
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+.footerbar-path.idle {
+  direction: ltr;
 }
 
 .footerbar-hints i {

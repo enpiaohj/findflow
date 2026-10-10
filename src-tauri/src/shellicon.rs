@@ -315,8 +315,14 @@ pub async fn file_thumbnail(
     tauri::async_runtime::spawn_blocking(move || {
         let v = thumb_worker().request(&path, size, Mode::Thumb, Duration::from_secs(8));
         let mut cache = thumb_cache().lock().unwrap();
+        // 超出上限时只淘汰最旧的一批（约 1/4），而不是整体清空——
+        // 全清会让当前视口内所有缩略图重新生成，滚动时反复抖动。
         if cache.len() >= THUMB_CACHE_MAX {
-            cache.clear();
+            let drop_n = THUMB_CACHE_MAX / 4;
+            let keys: Vec<String> = cache.keys().take(drop_n).cloned().collect();
+            for k in keys {
+                cache.remove(&k);
+            }
         }
         cache.insert(key, v.clone());
         v

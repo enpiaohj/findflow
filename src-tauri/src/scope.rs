@@ -24,9 +24,20 @@ pub struct ScopeOptions {
     pub include_hidden: bool,
 }
 
+/// 是否为 UNC 网络路径（`\\server\share\...`）。
+pub fn is_unc_path(p: &str) -> bool {
+    let b = p.trim().as_bytes();
+    b.len() >= 2 && b[0] == b'\\' && b[1] == b'\\'
+}
+
 /// 盘符根目录（D: / D:\\）归一化为 D:\\，其余目录去掉尾部分隔符。
+/// UNC 路径（`\\server\share`）保留双前缀，只去尾部分隔符。
 pub fn normalize_scope_path(p: &str) -> String {
     let trimmed = p.trim();
+    if is_unc_path(trimmed) {
+        // 共享根 `\\server\share\` 去尾部分隔符后为 `\\server\share`
+        return trimmed.trim_end_matches('\\').to_string();
+    }
     let bytes = trimmed.as_bytes();
     if bytes.len() == 2 && bytes[1] == b':' {
         // 盘符统一大写，显示一致
@@ -38,8 +49,20 @@ pub fn normalize_scope_path(p: &str) -> String {
     }
 }
 
+/// 路径是否可作为索引范围：本地盘符绝对路径（`D:\...`）或 UNC 网络路径（`\\server\share\...`）。
+pub fn is_indexable_scope_path(p: &str) -> bool {
+    if is_unc_path(p) {
+        // 至少要有 `\\server\share` 三段
+        return p.trim_matches('\\').split('\\').count() >= 2;
+    }
+    p.len() >= 3 && p.chars().nth(1).map(|c| c == ':').unwrap_or(false)
+}
+
+/// 路径是否命中受保护目录。先展开 8.3 短名（`C:\PROGRA~1` → `C:\Program Files`），
+/// 否则短名写法可绕过按段比对（中危 #5）。
 pub fn is_protected(path: &str) -> bool {
-    path.split('\\')
+    let long = util::to_long_path(path);
+    long.split('\\')
         .any(|seg| PROTECTED_DIRS.contains(&seg.to_ascii_lowercase().as_str()))
 }
 
@@ -115,8 +138,8 @@ pub async fn scope_add(
     files_est: Option<i64>,
 ) -> Result<crate::models::ScopeInfo, String> {
     let path = normalize_scope_path(&path);
-    if path.len() < 3 || !path.chars().nth(1).map(|c| c == ':').unwrap_or(false) {
-        return Err("请输入本地磁盘或目录的绝对路径（如 D:\\项目资料）".into());
+    if !is_indexable_scope_path(&path) {
+        return Err("请输入本地磁盘路径（如 D:\\项目资料）或网络共享路径（如 \\\\服务器\\共享）".into());
     }
     if is_protected(&path) {
         return Err("系统与程序目录受保护，不能加入索引".into());
@@ -135,7 +158,10 @@ pub async fn scope_add(
                 .map_err(|e| e.to_string())?;
             Ok::<i64, String>(c.last_insert_rowid())
         })?;
-    store.watch_scope(scope_id, &path)?;
+    // 监听失败不阻断添加：范围已入库，扫描照常；仅失去实时增量（可重新校准补齐）。
+    if let Err(e) = store.watch_scope(scope_id, &path) {
+        tracing::warn!("范围已加入但实时监听未启用（{path}）：{e}");
+    }
     let _ = crate::scanner::start_scan_job(&store, scope_id);
     Ok(crate::models::ScopeInfo {
         scope_id,
@@ -271,6 +297,45 @@ mod tests {
         assert!(is_protected("C:\\Windows\\System32"));
         assert!(is_protected("D:\\Program Files\\App"));
         assert!(!is_protected("D:\\项目资料"));
+    }
+
+    #[test]
+    fn unc_paths_recognized_and_normalized() {
+        // UNC 前缀识别
+        assert!(is_unc_path("\\\\fileserver\\share\\项目资料"));
+        assert!(is_unc_path("\\\\server\\share"));
+        assert!(!is_unc_path("D:\\项目资料"));
+        assert!(!is_unc_path("D:\\"));
+        assert!(!is_unc_path("\\单反斜杠"));
+
+        // 归一化：保留双前缀，只去尾部分隔符
+        assert_eq!(
+            normalize_scope_path("\\\\fileserver\\share\\项目资料\\"),
+            "\\\\fileserver\\share\\项目资料"
+        );
+        assert_eq!(
+            normalize_scope_path("\\\\server\\share"),
+            "\\\\server\\share"
+        );
+        // 盘符路径行为不变
+        assert_eq!(normalize_scope_path("D:\\项目资料\\"), "D:\\项目资料");
+        assert_eq!(normalize_scope_path("D:"), "D:\\");
+    }
+
+    #[test]
+    fn indexable_scope_path_accepts_drives_and_unc() {
+        // 本地盘符
+        assert!(is_indexable_scope_path("D:\\"));
+        assert!(is_indexable_scope_path("D:\\项目资料"));
+        // UNC 需至少 \\server\share 两段
+        assert!(is_indexable_scope_path("\\\\fileserver\\share\\项目资料"));
+        assert!(is_indexable_scope_path("\\\\server\\share"));
+        assert!(!is_indexable_scope_path("\\\\server"));
+        assert!(!is_indexable_scope_path("\\\\"));
+        // 相对路径与裸盘符仍拒绝
+        assert!(!is_indexable_scope_path("项目资料"));
+        assert!(!is_indexable_scope_path("D:"));
+        assert!(!is_indexable_scope_path(""));
     }
 
     #[test]

@@ -126,7 +126,16 @@ export function useThumbnail(
     invoke<string | null>("file_thumbnail", { path, modifiedMs, size })
       .catch(() => null)
       .then((v) => {
-        if (thumbCache.size >= THUMB_CACHE_MAX) thumbCache.clear();
+        // 超出上限时只淘汰最旧的一批（约 1/4），不整体清空：
+        // 全清会让视口内所有缩略图重新请求，滚动时反复闪烁。
+        if (thumbCache.size >= THUMB_CACHE_MAX) {
+          const dropN = Math.floor(THUMB_CACHE_MAX / 4);
+          let i = 0;
+          for (const k of thumbCache.keys()) {
+            if (i++ >= dropN) break;
+            thumbCache.delete(k);
+          }
+        }
         thumbCache.set(key, v);
         if (alive) setValue(v);
       });

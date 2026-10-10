@@ -16,12 +16,20 @@ export default function RegularPage({ notice }: PageCtx) {
   const [clearOnHide, setClearOnHide] = useState(false);
   const [autostart, setAutostart] = useState(false);
   const [showTray, setShowTray] = useState(true);
+  const [autoCalibrate, setAutoCalibrate] = useState(true);
+  const [autoFulltext, setAutoFulltext] = useState(false);
 
   useEffect(() => {
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
     getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
     getSetting<boolean>("ui.showTrayIcon")
       .then((v) => setShowTray(v !== null ? !!v : true))
+      .catch(() => undefined);
+    getSetting<boolean>("ui.autoCalibrate")
+      .then((v) => setAutoCalibrate(v !== null ? !!v : true))
+      .catch(() => undefined);
+    getSetting<boolean>("ui.autoFulltext")
+      .then((v) => setAutoFulltext(!!v))
       .catch(() => undefined);
     autostartIsEnabled().then(setAutostart).catch(() => undefined);
   }, []);
@@ -103,6 +111,48 @@ export default function RegularPage({ notice }: PageCtx) {
             type="checkbox"
             checked={showTray}
             onChange={(e) => changeShowTray(e.target.checked)}
+          />
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h3>索引</h3>
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>自动定期校准</b>
+            <p className="muted">
+              每天在后台校准一次索引，补上实时监听遗漏的改动（休眠、网络共享、快速改动等）。
+              网络共享范围不做实时监听，只能靠它保持同步；关闭后需手动校准。
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoCalibrate}
+            onChange={(e) => {
+              setAutoCalibrate(e.target.checked);
+              setSetting("ui.autoCalibrate", e.target.checked).catch(() => undefined);
+            }}
+          />
+        </div>
+        <div className="toggle-row">
+          <div>
+            <b>自动提取正文</b>
+            <p className="muted">
+              在后台逐步提取文档正文，让「搜索正文内容」可用（默认关闭）。
+              待提取的文件可能多达数十万个、总体积数十 GB，开启后首次会持续较长时间读盘。
+              开发与构建目录（node_modules、target、dist 等）已自动跳过，只按文件名索引。
+              关闭后仍可在「内容」页手动启动一次。
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoFulltext}
+            onChange={(e) => {
+              setAutoFulltext(e.target.checked);
+              setSetting("ui.autoFulltext", e.target.checked).catch(() => undefined);
+            }}
           />
         </div>
       </section>

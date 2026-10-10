@@ -34,6 +34,13 @@ impl WatchPool {
     }
 
     pub fn watch(&self, scope_id: i64, path: &str) -> Result<(), String> {
+        // 网络共享（UNC）不做实时监听：notify 依赖的 ReadDirectoryChangesW 在 SMB 上
+        // 不可靠（丢事件、断连后不恢复），强行监听会得到「看似成功实则失效」的假象。
+        // 此类范围改为仅靠手动/定期校准保持同步。
+        if crate::scope::is_unc_path(path) {
+            tracing::info!("网络共享范围不做实时监听，依赖重新校准保持同步：{path}");
+            return Ok(());
+        }
         let mut map = self.watchers.lock().unwrap();
         if map.contains_key(&scope_id) {
             return Ok(());

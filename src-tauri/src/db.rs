@@ -138,7 +138,35 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX idx_outbox_pending ON index_outbox(state);
     ",
     // v2：范围预估文件数（试扫确认值，用于扫描进度百分比）
-    "ALTER TABLE scopes ADD COLUMN files_est INTEGER;"
+    "ALTER TABLE scopes ADD COLUMN files_est INTEGER;",
+    // v3：音频 / 视频类型映射补全（新增 flac、ape、m2ts 等扩展名）。
+    // kind 由扫描时写入，已有记录仍是旧映射；此处就地修正，避免用户重建索引。
+    // 只更新 kind 列，值可由 ext 重新推导，无信息损失。
+    "UPDATE files SET kind='audio' WHERE kind='other' AND ext IN
+        ('mp3','wav','flac','aac','ogg','m4a','wma','ape','opus','aiff','aif','m4b','amr','mid','midi','ac3','dts');
+     UPDATE files SET kind='video' WHERE kind='other' AND ext IN
+        ('mp4','mkv','avi','mov','wmv','flv','webm','m4v','mpg','mpeg','rmvb','rm','m2ts','3gp','vob','asf','f4v');",
+    // v4：(scope_id, parent_path) 复合索引。
+    // 空搜索浏览（打开应用的默认视图）按「范围 + 父目录」过滤，原先只走 idx_files_scope
+    // 命中整个范围（实测 92 万行）再逐行比对 parent_path 并建临时 B 树排序，约 260ms；
+    // 复合索引后降至亚毫秒。索引体积约 1 个范围条目/行，构建耗时秒级。
+    "CREATE INDEX IF NOT EXISTS idx_files_scope_parent ON files(scope_id, parent_path);",
+    // v5：补全扩展名映射（Office 系列、图片、压缩包等）。
+    // kind 由扫描时写入，已有记录仍是旧映射；此处就地修正，避免用户重建索引。
+    // 只更新 kind 列，值可由 ext 重新推导，无信息损失。
+    // 注意 `.ts` / `.mts` 有意不归视频（本机几乎全是 TypeScript），故不在列表中。
+    "UPDATE files SET kind='doc' WHERE kind='other' AND ext IN
+        ('docm','dot','dotx','odt','wps','pages','tex','epub','mht','mhtml');
+     UPDATE files SET kind='sheet' WHERE kind='other' AND ext IN
+        ('xlsm','xlsb','et','numbers','tsv');
+     UPDATE files SET kind='image' WHERE kind='other' AND ext IN
+        ('jfif','jpe','jp2','heic','heif','avif','psd','cr2','nef','arw','dng');
+     UPDATE files SET kind='video' WHERE kind='other' AND ext IN
+        ('m2v','3g2','divx','ogv','mxf');
+     UPDATE files SET kind='audio' WHERE kind='other' AND ext IN
+        ('oga','mka','caf','weba','ra');
+     UPDATE files SET kind='archive' WHERE kind='other' AND ext IN
+        ('tgz','txz','zst','lz4','lz','br','cab','iso','arj','lzh');"
 ];
 
 pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
@@ -210,6 +238,104 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn migrate_v3_fixes_media_kinds_in_existing_rows() {
+        // 构造一个停留在 v2 的库（v3 之前的状态），验证升级后旧记录被就地修正
+        let conn = db_at_version(2);
+        conn.execute(
+            r"INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\m', 'now')",
+            [],
+        )
+        .unwrap();
+        // 旧映射把音频/视频扩展名归到 other
+        for (name, ext) in [("song.flac", "flac"), ("clip.m2ts", "m2ts"), ("note.txt", "txt")] {
+            conn.execute(
+                r"INSERT INTO files(scope_id, parent_path, name, path, ext, kind,
+                    size, modified_ms, created_ms, is_dir, fulltext_state, updated_ms)
+                  VALUES (1, 'D:\m', ?1, ?2, ?3, 'other', 1, 0, 0, 0, 'none', 0)",
+                rusqlite::params![name, format!(r"D:\m\{name}"), ext],
+            )
+            .unwrap();
+        }
+        // 升级到最新
+        migrate(&conn).unwrap();
+        let kind_of = |name: &str| -> String {
+            conn.query_row("SELECT kind FROM files WHERE name=?1", [name], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(kind_of("song.flac"), "audio", "音频扩展名应被修正");
+        assert_eq!(kind_of("clip.m2ts"), "video", "视频扩展名应被修正");
+        assert_eq!(kind_of("note.txt"), "other", "无关扩展名不受影响");
+    }
+
+    /// 构造一个停留在指定版本的库，便于验证后续迁移。
+    fn db_at_version(version: usize) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        configure(&conn).unwrap();
+        for (i, script) in MIGRATIONS.iter().take(version).enumerate() {
+            conn.execute_batch(script).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", i + 1))
+                .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn migrate_v5_completes_extension_kinds_in_existing_rows() {
+        // v5 之前：Office / 图片 / 压缩包的补充格式都落在 other，筛选时会整类消失
+        let conn = db_at_version(4);
+        conn.execute(
+            r"INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\m', 'now')",
+            [],
+        )
+        .unwrap();
+        let cases = [
+            ("a.xlsm", "xlsm", "sheet"),
+            ("b.tsv", "tsv", "sheet"),
+            ("c.odt", "odt", "doc"),
+            ("d.wps", "wps", "doc"),
+            ("e.mhtml", "mhtml", "doc"),
+            ("f.heic", "heic", "image"),
+            ("g.psd", "psd", "image"),
+            ("h.cab", "cab", "archive"),
+            ("i.tgz", "tgz", "archive"),
+            ("j.oga", "oga", "audio"),
+            ("k.ogv", "ogv", "video"),
+            // 这两个必须保持 other：绝大多数是 TypeScript 源码 / 声明文件
+            ("l.mts", "mts", "other"),
+            ("m.ts", "ts", "other"),
+        ];
+        for (name, ext, _) in cases {
+            conn.execute(
+                r"INSERT INTO files(scope_id, parent_path, name, path, ext, kind,
+                    size, modified_ms, created_ms, is_dir, fulltext_state, updated_ms)
+                  VALUES (1, 'D:\m', ?1, ?2, ?3, 'other', 1, 0, 0, 0, 'none', 0)",
+                rusqlite::params![name, format!(r"D:\m\{name}"), ext],
+            )
+            .unwrap();
+        }
+        migrate(&conn).unwrap();
+        for (name, ext, want) in cases {
+            let got: String = conn
+                .query_row("SELECT kind FROM files WHERE name=?1", [name], |r| r.get(0))
+                .unwrap();
+            assert_eq!(got, want, "{ext} 的 kind 应为 {want}");
+        }
+    }
+
+    #[test]
+    fn migrate_creates_scope_parent_index() {
+        let conn = open_in_memory().unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_files_scope_parent'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "空搜索浏览依赖的复合索引必须存在");
     }
 
     // 回归测试：pragma_update 写 user_version 在同一连接上可读但不会持久化到文件，

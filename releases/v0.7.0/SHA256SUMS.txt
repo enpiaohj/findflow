@@ -1,0 +1,2 @@
+04aef6db186b33ee81dd8de6401dc69b3931b27d87a85b35851a787e4f4cdda2 *FindFlow-v0.7.0-win-x64-setup.exe
+fafcdb6afd7e27bab6c35a8c583f564bfc552812beae78a413ff6f8ac04f4a3e *FindFlow-v0.7.0-win-x64.msi

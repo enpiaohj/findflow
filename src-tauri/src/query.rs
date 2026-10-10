@@ -12,7 +12,7 @@ pub fn parse(input: &str) -> QueryAst {
     while let Some(c) = chars.next() {
         match c {
             '"' => {
-                // 引号短语
+                // 引号短语；短语内若含通配符则按文件名整名匹配
                 let mut p = String::new();
                 for c2 in chars.by_ref() {
                     if c2 == '"' {
@@ -21,7 +21,11 @@ pub fn parse(input: &str) -> QueryAst {
                     p.push(c2);
                 }
                 if !p.is_empty() {
-                    phrase_parts.push(p);
+                    if is_wildcard(&p) {
+                        ast.name_include.push(p);
+                    } else {
+                        phrase_parts.push(p);
+                    }
                 }
             }
             ' ' => {
@@ -72,9 +76,21 @@ fn flush_token(tok: &str, free: &mut Vec<String>, ast: &mut QueryAst) {
                 return;
             }
             "type" | "kind" | "类型" => {
+                // 「文档」是一组类型而非单一类型：Word、Excel、PDF、纯文本都算文档。
+                // 只映射到 doc 会让「文档」筛选漏掉 Excel 与 PDF——用户反馈搜索到的
+                // 表格文件点「文档」后整个消失。需要单一类型时用 type:doc / type:sheet。
+                if matches!(v.to_lowercase().as_str(), "document" | "文档") {
+                    let group = ["doc", "sheet", "pdf"].map(String::from);
+                    if neg {
+                        ast.kinds_exclude.extend(group);
+                    } else {
+                        ast.kinds.extend(group);
+                    }
+                    return;
+                }
                 let mapped = map_kind(v);
                 if neg {
-                    ast.text_exclude.push(mapped);
+                    ast.kinds_exclude.push(mapped);
                 } else {
                     ast.kinds.push(mapped);
                 }
@@ -103,11 +119,43 @@ fn flush_token(tok: &str, free: &mut Vec<String>, ast: &mut QueryAst) {
             _ => {}
         }
     }
+    // 含通配符的自由词按整名匹配（`*.pdf`、`报告*.docx`），
+    // 不走全文检索——`*` 在分词与倒排里无法表达「任意字符」。
     if neg {
-        ast.text_exclude.push(t.to_string());
+        if is_wildcard(t) {
+            ast.name_exclude.push(t.to_string());
+        } else {
+            ast.text_exclude.push(t.to_string());
+        }
+    } else if is_wildcard(t) {
+        ast.name_include.push(t.to_string());
     } else {
         free.push(t.to_string());
     }
+}
+
+/// 自由词是否含通配符（`*` 任意多字符、`?` 单字符）。
+pub fn is_wildcard(token: &str) -> bool {
+    token.contains('*') || token.contains('?')
+}
+
+/// 通配模式 → SQL LIKE 模式：`*` → `%`、`?` → `_`，
+/// 并把模式中原本的 LIKE 元字符（`%` `_` 与转义符）转义，避免用户输入被当作通配。
+/// 返回的模式需配合 `LIKE ? ESCAPE '\'` 使用。
+pub fn wildcard_to_like(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len() + 4);
+    for c in pattern.chars() {
+        match c {
+            '*' => out.push('%'),
+            '?' => out.push('_'),
+            // 反斜杠是 ESCAPE 字符，必须先转义自身
+            '\\' => out.push_str("\\\\"),
+            '%' => out.push_str("\\%"),
+            '_' => out.push_str("\\_"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn map_kind(v: &str) -> String {
@@ -235,9 +283,84 @@ mod tests {
     }
 
     #[test]
+    fn document_type_filter_covers_office_group() {
+        // 「文档」按钮要能筛出 Excel 与 PDF，只映射 doc 会让表格文件整个消失
+        let ast = parse("type:document");
+        assert_eq!(ast.kinds, vec!["doc", "sheet", "pdf"]);
+        assert_eq!(parse("type:文档").kinds, vec!["doc", "sheet", "pdf"]);
+        // 单一类型仍可用，且与组别名区分
+        assert_eq!(parse("type:doc").kinds, vec!["doc"]);
+        assert_eq!(parse("type:sheet").kinds, vec!["sheet"]);
+        // 取反走类型排除，不落到按文件名排除
+        let neg = parse("-type:文档");
+        assert_eq!(neg.kinds_exclude, vec!["doc", "sheet", "pdf"]);
+        assert!(neg.kinds.is_empty());
+        assert!(
+            neg.text_exclude.is_empty(),
+            "类型取反不能落到 text_exclude（那里按文件名子串排除）"
+        );
+        let neg2 = parse("-type:图片");
+        assert_eq!(neg2.kinds_exclude, vec!["image"]);
+        assert!(neg2.text_exclude.is_empty());
+    }
+
+    #[test]
     fn parses_type_and_size_range() {
         let ast = parse("type:图片 size:1GB..2GB");
         assert_eq!(ast.kinds, vec!["image"]);
         assert!(ast.size_min.unwrap() > 0 && ast.size_max.unwrap() >= ast.size_min.unwrap());
+    }
+
+    #[test]
+    fn wildcard_tokens_go_to_name_match_not_fulltext() {
+        let ast = parse("*.pdf");
+        assert!(ast.text.is_none(), "通配词不应进入全文检索");
+        assert_eq!(ast.name_include, vec!["*.pdf"]);
+        assert!(ast.has_filters());
+
+        let ast2 = parse("报告*.docx 方案");
+        assert_eq!(ast2.name_include, vec!["报告*.docx"]);
+        assert_eq!(ast2.text.as_deref(), Some("方案"), "普通词仍走全文检索");
+
+        let ast3 = parse("2026-??-??.txt");
+        assert_eq!(ast3.name_include, vec!["2026-??-??.txt"]);
+    }
+
+    #[test]
+    fn wildcard_with_negation_excludes_by_name() {
+        let ast = parse("*.log -*.tmp");
+        assert_eq!(ast.name_include, vec!["*.log"]);
+        assert_eq!(ast.name_exclude, vec!["*.tmp"]);
+        assert!(ast.text_exclude.is_empty());
+    }
+
+    #[test]
+    fn wildcard_inside_quotes_matches_name() {
+        let ast = parse("\"报告*.docx\"");
+        assert_eq!(ast.name_include, vec!["报告*.docx"]);
+        assert!(ast.phrase.is_none(), "含通配符的引号短语不走短语检索");
+        // 不含通配符的引号短语语义不变
+        let ast2 = parse("\"实施方案\"");
+        assert_eq!(ast2.phrase.as_deref(), Some("实施方案"));
+        assert!(ast2.name_include.is_empty());
+    }
+
+    #[test]
+    fn wildcard_to_like_translates_and_escapes() {
+        assert_eq!(wildcard_to_like("*.pdf"), "%.pdf");
+        assert_eq!(wildcard_to_like("报告*.docx"), "报告%.docx");
+        assert_eq!(wildcard_to_like("2026-??-??.txt"), "2026-__-__.txt");
+        // LIKE 元字符必须转义，避免用户输入的 % _ 变成通配
+        assert_eq!(wildcard_to_like("100%_done*"), "100\\%\\_done%");
+        // 反斜杠自身先转义（ESCAPE '\'）
+        assert_eq!(wildcard_to_like("a\\b*"), "a\\\\b%");
+    }
+
+    #[test]
+    fn plain_tokens_unaffected_by_wildcard_support() {
+        let ast = parse("AD升级 ext:docx");
+        assert_eq!(ast.text.as_deref(), Some("AD升级"));
+        assert!(ast.name_include.is_empty());
+        assert_eq!(ast.exts, vec!["docx"]);
     }
 }

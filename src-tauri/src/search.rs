@@ -6,8 +6,19 @@ use crate::models::{FileRow, QueryAst, SortMode};
 
 const RANK_W: (f64, f64, f64, f64, f64, f64, f64) = (0.45, 0.20, 0.10, 0.10, 0.08, 0.05, 0.02);
 
+/// 全文候选上限。FTS 只能按相关度给出前 N 条，而类型 / 扩展名 / 大小 / 路径等过滤
+/// 是在候选取出之后才由 SQL 完成的。若上限偏小，命中会因「先按相关度截断、再过滤」
+/// 被白白丢掉——例如「报告 type:pdf」时 600 条候选里可能只有几条 pdf，
+/// 而全库名含「报告」的 pdf 远不止这些。因此带过滤条件时放宽上限。
+const CANDIDATES: usize = 600;
+const CANDIDATES_WITH_FILTERS: usize = 4000;
+
 pub struct SearchOutcome {
     pub items: Vec<FileRow>,
+    /// 命中总数（有查询条件时为真实命中数，空搜索浏览时为索引总数）。
+    /// 界面「共 N 项」用它，才能在只列出前 200 条时告诉用户实际有多少条。
+    pub matched: i64,
+    /// 索引总数（页脚「索引 N 条」）。
     pub total: i64,
     pub elapsed_ms: u128,
 }
@@ -25,6 +36,8 @@ pub fn run(
     let mut candidate_scores: Option<Vec<(i64, f64)>> = None;
 
     let has_text = ast.text.is_some() || ast.phrase.is_some();
+    // 通配模式同样属于「有查询」：不应触发空搜索浏览的第一层限制
+    let has_query = has_text || !ast.name_include.is_empty();
     let mut candidate_addrs: Option<Vec<(i64, tantivy::DocAddress)>> = None;
     let query_obj = if has_text {
         Some(index.build_query(
@@ -37,7 +50,12 @@ pub fn run(
     };
     if has_text {
         let q = query_obj.as_ref().unwrap();
-        let docs = index.candidate_docs(q.as_ref(), 600)?;
+        let cap = if ast.has_filters() {
+            CANDIDATES_WITH_FILTERS
+        } else {
+            CANDIDATES
+        };
+        let docs = index.candidate_docs(q.as_ref(), cap)?;
         // 候选顺序即相关度顺序，转换为可比较的分数。
         let scored: Vec<(i64, f64)> = docs
             .iter()
@@ -52,8 +70,13 @@ pub fn run(
         );
     }
 
+    // 有查询条件时，「共 N 项」必须是真实命中数。此前一律返回索引总数（实测 95 万），
+    // 用户搜出 7 条却看到「共 952948 项」，会以为结果被截断而反复重搜。
+    // 空搜索浏览没有任何条件，此时索引总数才等于命中数，继续用缓存避免每次按键全表 COUNT。
+    let count_needed = has_query || ast.has_filters();
+
     // 先构建 SQL；文本候选存在时用临时表装载。
-    let items: Vec<FileRow> = store.with_conn(|c| {
+    let (items, matched_total): (Vec<FileRow>, Option<i64>) = store.with_conn(|c| {
         if let Some(scored) = &candidate_scores {
             c.execute("DROP TABLE IF EXISTS temp.cands", []).ok();
             c.execute("CREATE TEMP TABLE cands(fid INTEGER PRIMARY KEY, sc REAL)", [])
@@ -82,7 +105,7 @@ pub fn run(
                 bind.push(Box::new(sid));
                 // 空搜索浏览为资源管理器式：只列出该索引位置根目录的第一层。
                 // scope_id 仅由前端在无关键词时传入，关键词搜索不受影响
-                if !has_text {
+                if !has_query {
                     let root: Option<String> = c
                         .query_row(
                             "SELECT path FROM scopes WHERE scope_id = ?1",
@@ -111,6 +134,13 @@ pub fn run(
                 bind.push(Box::new(k.clone()));
             }
         }
+        if !ast.kinds_exclude.is_empty() {
+            let qs = vec!["?"; ast.kinds_exclude.len()].join(",");
+            where_parts.push(format!("f.kind NOT IN ({qs})"));
+            for k in &ast.kinds_exclude {
+                bind.push(Box::new(k.clone()));
+            }
+        }
         for p in &ast.path_include {
             where_parts.push("f.path LIKE ?".to_string());
             bind.push(Box::new(format!("%{}%", p)));
@@ -123,6 +153,15 @@ pub fn run(
             where_parts.push("f.name NOT LIKE ? AND f.ext <> ?".to_string());
             bind.push(Box::new(format!("%{}%", t)));
             bind.push(Box::new(t.clone()));
+        }
+        // 文件名通配（`*` `?`）：按整名匹配，元字符已转义，故用 ESCAPE '\'
+        for n in &ast.name_include {
+            where_parts.push("f.name LIKE ? ESCAPE '\\'".to_string());
+            bind.push(Box::new(crate::query::wildcard_to_like(n)));
+        }
+        for n in &ast.name_exclude {
+            where_parts.push("f.name NOT LIKE ? ESCAPE '\\'".to_string());
+            bind.push(Box::new(crate::query::wildcard_to_like(n)));
         }
         if let Some(s) = ast.size_min {
             where_parts.push("f.size >= ?".into());
@@ -144,6 +183,9 @@ pub fn run(
             SortMode::Relevance => {
                 if candidate_scores.is_some() {
                     "c.sc DESC, f.modified_ms DESC"
+                } else if !ast.name_include.is_empty() {
+                    // 纯通配查询：无文本候选，按名称序更接近通配匹配的直觉
+                    "f.name COLLATE NOCASE ASC"
                 } else if ast.modified_after_ms.is_some() || ast.modified_before_ms.is_some() {
                     // 最近筛选：按时间序走 modified 索引
                     "f.modified_ms DESC"
@@ -196,8 +238,27 @@ pub fn run(
             })
             .map_err(|e| e.to_string())?;
         let all: Vec<FileRow> = rows.filter_map(|r| r.ok()).collect();
+        drop(stmt);
+        // 必须在丢弃 temp.cands 之前统计：命中数依赖同一套 JOIN 与 WHERE
+        let matched = if count_needed {
+            let count_sql = format!(
+                "SELECT COUNT(*) FROM files f {join} WHERE {where}",
+                join = if candidate_scores.is_some() {
+                    "JOIN temp.cands c ON c.fid = f.file_id"
+                } else {
+                    ""
+                },
+                where = where_parts.join(" AND "),
+            );
+            Some(
+                c.query_row(&count_sql, refs.as_slice(), |r| r.get(0))
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
         c.execute("DROP TABLE IF EXISTS temp.cands", []).ok();
-        Ok::<Vec<FileRow>, String>(all)
+        Ok::<(Vec<FileRow>, Option<i64>), String>((all, matched))
     })?;
 
     // 附加标签
@@ -272,26 +333,34 @@ pub fn run(
     }
 
     let total = cached_total(store, scope_id)?;
+    // 空搜索浏览没有查询条件，命中数即索引总数
+    let matched = matched_total.unwrap_or(total);
     let _ = &index;
     Ok(SearchOutcome {
         items,
+        matched,
         total,
         elapsed_ms: start.elapsed().as_millis(),
     })
 }
 
+/// 索引总数缓存条目：数据库身份、位置、写入时刻、计数。
+type TotalCacheEntry = (usize, Option<i64>, Instant, i64);
+
 /// 索引总数（UI 显示“共 N 项”）：百万级 COUNT(*) 需数十毫秒，每次按键都算会拖慢输入，
-/// 缓存 10 秒即可满足显示需要。单槽缓存键含位置：切换位置或超时才重算。
+/// 缓存 10 秒即可满足显示需要。缓存键含数据库身份与位置：切换位置、切换数据库或超时才重算。
 /// 指定位置时与空搜索浏览一致，只统计该位置根目录第一层。
 fn cached_total(
     store: &crate::settings::SettingsStore,
     scope_id: Option<i64>,
 ) -> Result<i64, String> {
-    static TOTAL: std::sync::Mutex<Option<(Option<i64>, Instant, i64)>> =
-        std::sync::Mutex::new(None);
+    static TOTAL: std::sync::Mutex<Option<TotalCacheEntry>> = std::sync::Mutex::new(None);
+    // 缓存是进程级静态量，必须以数据库身份区分：否则不同库（如并行测试的内存库）
+    // 会互相命中对方的计数。
+    let db_id = store.id();
     let mut cache = TOTAL.lock().unwrap();
-    if let Some((key, at, n)) = *cache {
-        if key == scope_id && at.elapsed() < std::time::Duration::from_secs(10) {
+    if let Some((cached_db, cached_scope, at, n)) = *cache {
+        if cached_db == db_id && cached_scope == scope_id && at.elapsed() < std::time::Duration::from_secs(10) {
             return Ok(n);
         }
     }
@@ -314,7 +383,7 @@ fn cached_total(
         }
         .map_err(|e| e.to_string())
     })?;
-    *cache = Some((scope_id, Instant::now(), n));
+    *cache = Some((db_id, scope_id, Instant::now(), n));
     Ok(n)
 }
 
@@ -370,6 +439,7 @@ pub async fn cmd_search(
     let outcome = run(&store.db, &store.index, &ast, limit.unwrap_or(200), scope_id)?;
     Ok(serde_json::json!({
         "items": outcome.items,
+        "matched": outcome.matched,
         "total": outcome.total,
         "elapsedMs": outcome.elapsed_ms,
         "ast": ast,
@@ -443,5 +513,150 @@ mod tests {
         let unknown_scope = run(&store, &index, &by_name, 10, Some(99)).unwrap();
         assert!(unknown_scope.items.is_empty());
         assert_eq!(unknown_scope.total, 0);
+    }
+
+    /// 「共 N 项」必须是真实命中数：结果被 200 条上限截断时，
+    /// 界面要能告诉用户实际命中了多少条，而不是只报列出的条数。
+    #[test]
+    fn matched_counts_all_hits_not_just_returned_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+        });
+        for i in 0..5 {
+            let name = format!("会议纪要{i}.txt");
+            let path = format!("D:/a/{name}");
+            let fid = store.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                    rusqlite::params![name, path],
+                )
+                .unwrap();
+                c.last_insert_rowid() as u64
+            });
+            index.add(index.build_doc(fid, &name, None, None)).unwrap();
+        }
+        index.commit().unwrap();
+        index.reload();
+
+        let ast = QueryAst {
+            text: Some("会议".into()),
+            ..Default::default()
+        };
+        let out = run(&store, &index, &ast, 2, None).unwrap();
+        assert_eq!(out.items.len(), 2, "只返回上限条数");
+        assert_eq!(out.matched, 5, "命中数应为全部 5 条，而不是返回的 2 条");
+
+        // 空搜索浏览没有条件，命中数即索引总数
+        let browse = QueryAst::default();
+        let out2 = run(&store, &index, &browse, 2, None).unwrap();
+        assert_eq!(out2.matched, 5);
+        assert_eq!(out2.total, 5);
+    }
+
+    /// 通配模式按整名匹配：`*` 任意多字符、`?` 单字符，且元字符被转义。
+    #[test]
+    fn wildcard_filters_by_full_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+            for name in [
+                "报告-2026.pdf",
+                "报告-2027.pdf",
+                "预算.xlsx",
+                "100%_增长.txt",
+                "note-01.txt",
+                "note-02.txt",
+                "note-1.txt",
+            ] {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                    rusqlite::params![name, format!("D:/a\\{name}")],
+                )
+                .unwrap();
+            }
+        });
+
+        let names = |ast: &QueryAst| -> Vec<String> {
+            let mut v: Vec<String> = run(&store, &index, ast, 20, None)
+                .unwrap()
+                .items
+                .iter()
+                .map(|i| i.name.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        let wc = |patterns: &[&str]| QueryAst {
+            name_include: patterns.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+
+        // 前缀 + 任意扩展名
+        assert_eq!(names(&wc(&["报告*"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
+        // 任意名 + 指定扩展名
+        assert_eq!(names(&wc(&["*.pdf"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
+        // ? 只匹配单个字符：note-0?.txt 不含 note-1.txt
+        assert_eq!(names(&wc(&["note-0?.txt"])), vec!["note-01.txt", "note-02.txt"]);
+        // 用户输入的 % 是字面量，不是通配
+        assert_eq!(names(&wc(&["100%_增长.txt"])), vec!["100%_增长.txt"]);
+        assert!(names(&wc(&["100%增长*"])).is_empty(), "% 不应匹配任意字符");
+
+        // 排除模式
+        let excluded = QueryAst {
+            name_include: vec!["*.pdf".into()],
+            name_exclude: vec!["*2027*".into()],
+            ..Default::default()
+        };
+        assert_eq!(names(&excluded), vec!["报告-2026.pdf"]);
+
+        // 纯通配查询默认按名称排序，而非落到「按大小」
+        let plain = run(&store, &index, &wc(&["note-*"]), 20, None).unwrap();
+        assert_eq!(
+            plain.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            vec!["note-01.txt", "note-02.txt", "note-1.txt"]
+        );
+    }
+
+    /// 通配查询不应被当作空搜索浏览（不受 scope_id 的第一层限制）。
+    #[test]
+    fn wildcard_is_not_treated_as_empty_browse() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+        store.with_conn(|c| {
+            c.execute(
+                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                [],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                 VALUES (1, 'deep.pdf', 'D:/a/sub\\deep.pdf', 'doc', 1, 'D:/a/sub')",
+                [],
+            )
+            .unwrap();
+        });
+        let ast = QueryAst {
+            name_include: vec!["*.pdf".into()],
+            ..Default::default()
+        };
+        // 即便传了 scope_id，通配查询也应覆盖子目录
+        let out = run(&store, &index, &ast, 10, Some(1)).unwrap();
+        assert_eq!(out.items.len(), 1, "子目录内的通配命中不应被第一层限制滤掉");
     }
 }

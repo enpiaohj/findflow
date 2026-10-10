@@ -23,117 +23,162 @@ fn supported_ext(ext: &str) -> Option<&'static str> {
     })
 }
 
-/// 全文提取任务：按范围处理 pending 文件，写入 content_text + outbox（FR06）。
+/// 每批处理文件数。任务会按 file_id 游标连续推进多批，直到处理完。
+const BATCH: usize = 20_000;
+
+/// 全文提取任务：处理待提取文件，写入 content_text + outbox（FR06）。
+/// 游标按 file_id 递增推进：一是让单次任务能覆盖全库（此前固定上限 20000 条，
+/// 百万级索引下要点十几次才扫完），二是避免提取失败的文件（状态仍为 failed）
+/// 被同一轮反复选中而空转。
 pub fn run_fulltext(
     ctx: JobContext,
     db: std::sync::Arc<crate::settings::DbHandle>,
     scope_only: Option<i64>,
 ) {
-    let files: Result<Vec<FulltextFile>, String> = db.with_conn(|c| {
-        let sql = "SELECT file_id, path, ext, size, modified_ms FROM files
-             WHERE is_dir=0 AND (?1 IS NULL OR scope_id = ?1)
-             AND fulltext_state IN ('none','pending','failed') LIMIT 20000";
-        let mut stmt = c.prepare(sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![scope_only], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })
-            .map_err(|e| e.to_string())?;
-        let all: Vec<FulltextFile> = rows.filter_map(|x| x.ok()).collect();
-        Ok::<_, String>(all)
-    });
-    let files = match files {
-        Ok(v) => v,
-        Err(e) => {
-            ctx.finish_failed(&e);
-            return;
-        }
-    };
-    let total = files.len() as f64;
-    let mut done = 0f64;
+    let total: i64 = db
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM files
+                 WHERE is_dir=0 AND (?1 IS NULL OR scope_id = ?1)
+                   AND fulltext_state IN ('none','pending','failed')",
+                params![scope_only],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        });
+    let mut processed: i64 = 0;
     let mut ok_count = 0u64;
     let mut fail_count = 0u64;
-    for (fid, path, ext, size, modified) in files {
+    let mut last_fid: i64 = 0;
+    loop {
         if ctx.cancelled() {
             ctx.finish_cancelled();
             return;
         }
-        ctx.wait_if_paused();
-        done += 1.0;
-        if done % 20.0 == 0.0 {
-            ctx.progress(done / total.max(1.0), &format!("提取 {} / {}", done as u64, total as u64));
-        }
-        let Some(extractor) = supported_ext(&ext) else {
-            continue;
+        let files: Result<Vec<FulltextFile>, String> = db.with_conn(|c| {
+            let mut stmt = c
+                .prepare(
+                    "SELECT file_id, path, ext, size, modified_ms FROM files
+                     WHERE is_dir=0 AND (?1 IS NULL OR scope_id = ?1)
+                       AND fulltext_state IN ('none','pending','failed')
+                       AND file_id > ?2
+                     ORDER BY file_id LIMIT ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![scope_only, last_fid, BATCH as i64], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(rows.filter_map(|x| x.ok()).collect())
+        });
+        let files = match files {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.finish_failed(&e);
+                return;
+            }
         };
-        // OneDrive 占位与超限文件只索引元数据（§6.3、FR06）
-        let p = Path::new(&path);
-        if size > MAX_CONTENT_FILE {
-            mark_state(db.clone(), fid, "skipped", "too_large", extractor, modified);
-            continue;
+        if files.is_empty() {
+            break;
         }
-        let attrs = std::fs::metadata(p)
-            .map(|m| {
-                use std::os::windows::fs::MetadataExt;
-                m.file_attributes()
-            })
-            .unwrap_or(0);
-        if util::is_cloud_placeholder(attrs) {
-            mark_state(db.clone(), fid, "skipped", "cloud_placeholder", extractor, modified);
-            continue;
-        }
-        // 单文件超时隔离：卡住的解析器不会拖死整个任务（FR06）
-        let p_t = p.to_path_buf();
-        let ext_t = extractor.to_string();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name(format!("extract-{}", ext_t))
-            .spawn(move || {
-                let _ = tx.send(extract_text(&p_t, &ext_t));
-            })
-            .ok();
-        let result = match rx.recv_timeout(std::time::Duration::from_secs(20)) {
-            Ok(r) => r,
-            Err(_) => Err("extraction_timeout".to_string()),
-        };
-        match result {
-            Ok(text) => {
-                db.with_conn(|c| {
-                    // 全部写入共用同一次加锁：mark_state 内部也会加锁，嵌套调用会自死锁
-                    c.execute("DELETE FROM content_text WHERE file_id=?1", [fid]).ok();
-                    c.execute(
-                        "INSERT INTO content_text(file_id, content_text) VALUES (?1, ?2)",
-                        params![fid, text],
-                    )
-                    .ok();
-                    c.execute(
-                        "INSERT INTO content_state(file_id, extractor, status, error_code, indexed_ms)
-                         VALUES (?1,?2,'done',NULL,?3)
-                         ON CONFLICT(file_id) DO UPDATE SET
-                           extractor=excluded.extractor, status=excluded.status,
-                           error_code=NULL, indexed_ms=excluded.indexed_ms",
-                        params![fid, extractor, util::now_ms()],
-                    )
-                    .ok();
-                    c.execute(
-                        "UPDATE files SET fulltext_state='done' WHERE file_id=?1",
-                        [fid],
-                    )
-                    .ok();
-                    c.execute(
-                        "INSERT INTO index_outbox(file_id, operation, created_ms) VALUES (?1,'upsert',?2)",
-                        params![fid, util::now_ms()],
-                    )
-                    .ok();
-                    Ok::<(), String>(())
+        let full_batch = files.len() >= BATCH;
+        last_fid = files.last().map(|f| f.0).unwrap_or(last_fid);
+        for (fid, path, ext, size, modified) in files {
+            if ctx.cancelled() {
+                ctx.finish_cancelled();
+                return;
+            }
+            ctx.wait_if_paused();
+            processed += 1;
+            if processed % 20 == 0 {
+                ctx.progress(
+                    processed as f64 / total.max(1) as f64,
+                    &format!("提取 {processed} / {total}"),
+                );
+            }
+            let Some(extractor) = supported_ext(&ext) else {
+                continue;
+            };
+            // 开发 / 构建目录（node_modules、target、dist 等）不进正文索引：
+            // 里面几乎只有第三方依赖与编译产物，占待抽取文件的绝大多数。
+            // 名称索引不受影响，仍可按文件名搜到这些文件。
+            if util::is_dev_dir_path(&path) {
+                mark_state(db.clone(), fid, "skipped", "dev_dir", extractor, modified);
+                continue;
+            }
+            // OneDrive 占位与超限文件只索引元数据（§6.3、FR06）
+            let p = Path::new(&path);
+            if size > MAX_CONTENT_FILE {
+                mark_state(db.clone(), fid, "skipped", "too_large", extractor, modified);
+                continue;
+            }
+            let attrs = std::fs::metadata(p)
+                .map(|m| {
+                    use std::os::windows::fs::MetadataExt;
+                    m.file_attributes()
+                })
+                .unwrap_or(0);
+            if util::is_cloud_placeholder(attrs) {
+                mark_state(db.clone(), fid, "skipped", "cloud_placeholder", extractor, modified);
+                continue;
+            }
+            // 单文件超时隔离：卡住的解析器不会拖死整个任务（FR06）
+            let p_t = p.to_path_buf();
+            let ext_t = extractor.to_string();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name(format!("extract-{}", ext_t))
+                .spawn(move || {
+                    let _ = tx.send(extract_text(&p_t, &ext_t));
                 })
                 .ok();
-                ok_count += 1;
+            let result = match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+                Ok(r) => r,
+                Err(_) => Err("extraction_timeout".to_string()),
+            };
+            match result {
+                Ok(text) => {
+                    db.with_conn(|c| {
+                        // 全部写入共用同一次加锁：mark_state 内部也会加锁，嵌套调用会自死锁
+                        c.execute("DELETE FROM content_text WHERE file_id=?1", [fid]).ok();
+                        c.execute(
+                            "INSERT INTO content_text(file_id, content_text) VALUES (?1, ?2)",
+                            params![fid, text],
+                        )
+                        .ok();
+                        c.execute(
+                            "INSERT INTO content_state(file_id, extractor, status, error_code, indexed_ms)
+                             VALUES (?1,?2,'done',NULL,?3)
+                             ON CONFLICT(file_id) DO UPDATE SET
+                               extractor=excluded.extractor, status=excluded.status,
+                               error_code=NULL, indexed_ms=excluded.indexed_ms",
+                            params![fid, extractor, util::now_ms()],
+                        )
+                        .ok();
+                        c.execute(
+                            "UPDATE files SET fulltext_state='done' WHERE file_id=?1",
+                            [fid],
+                        )
+                        .ok();
+                        c.execute(
+                            "INSERT INTO index_outbox(file_id, operation, created_ms) VALUES (?1,'upsert',?2)",
+                            params![fid, util::now_ms()],
+                        )
+                        .ok();
+                        Ok::<(), String>(())
+                    })
+                    .ok();
+                    ok_count += 1;
+                }
+                Err(e) => {
+                    mark_state(db.clone(), fid, "failed", &e, extractor, modified);
+                    fail_count += 1;
+                }
             }
-            Err(e) => {
-                mark_state(db.clone(), fid, "failed", &e, extractor, modified);
-                fail_count += 1;
-            }
+        }
+        if !full_batch {
+            break;
         }
     }
     ctx.finish_ok(Some(
@@ -180,6 +225,52 @@ pub fn start_fulltext_job(
             run_fulltext(ctx, db, scope_id)
         })?;
     Ok(())
+}
+
+/// 自动正文抽取的首次延迟：让扫描与索引重建先跑完，避免三者争抢磁盘。
+const AUTO_FULLTEXT_FIRST_DELAY_SECS: u64 = 300;
+/// 自动正文抽取的检查间隔。抽取是重活（读全库文件），不必频繁触发；
+/// 有新改动时文件会被扫描器置为 pending，下个周期自然会被拾起。
+const AUTO_FULLTEXT_TICK_SECS: u64 = 1800;
+
+/// 后台自动抽取正文。默认关闭（设置项 ui.autoFulltext）：
+/// 待抽取量实测可达 27 万个文件 / 54 GB，跑完需数小时读盘，
+/// 默认开启会让首次启动就在后台持续占用磁盘，因此交由用户显式开启。
+pub fn start_auto_fulltext(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("auto-fulltext".into())
+        .spawn(move || {
+            use tauri::Manager;
+            std::thread::sleep(std::time::Duration::from_secs(AUTO_FULLTEXT_FIRST_DELAY_SECS));
+            loop {
+                let state = app.state::<std::sync::Arc<crate::AppState>>();
+                let enabled = state
+                    .db
+                    .get_or("ui.autoFulltext", serde_json::json!(false))
+                    .as_bool()
+                    .unwrap_or(false);
+                if enabled {
+                    let pending: i64 = state.bg_db.with_conn(|c| {
+                        c.query_row(
+                            "SELECT COUNT(*) FROM files
+                             WHERE is_dir=0 AND fulltext_state IN ('none','pending')",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0)
+                    });
+                    if pending > 0 {
+                        // 已有同类型任务在跑时会被 JobEngine 拒绝，天然去重
+                        match start_fulltext_job(&state, None) {
+                            Ok(()) => tracing::info!("自动正文抽取已启动，待处理 {pending} 个文件"),
+                            Err(e) => tracing::debug!("自动正文抽取跳过：{e}"),
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(AUTO_FULLTEXT_TICK_SECS));
+            }
+        })
+        .ok();
 }
 
 pub fn extract_text(p: &Path, extractor: &str) -> Result<String, String> {

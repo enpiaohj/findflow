@@ -701,3 +701,29 @@
   width: 72px;
   color: var(--text-secondary);
 }
+
+/* 旧数据目录残留提示：仅在使用过「更改存储位置」后出现 */
+.legacy-notice {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--warning-subtle);
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+}
+
+.legacy-notice p {
+  margin: 0 0 6px;
+}
+
+.legacy-notice code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.legacy-notice button {
+  margin-top: 4px;
+}

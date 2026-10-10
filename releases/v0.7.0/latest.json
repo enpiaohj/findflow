@@ -1,0 +1,11 @@
+{
+  "version": "0.7.0",
+  "notes": "FindFlow v0.7.0：文件名通配符与类型排除、UNC 网络共享索引、自动校准与可选自动提取正文；删除与整理改为一次性令牌 + 稳定 ID 校验；修复命中数、资源管理器定位、目录重命名与索引事件丢失等问题；搜索窗状态栏常驻完整路径、大小与修改时间。",
+  "pub_date": "2026-10-10T09:58:55Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ25JZWFZYzMvQnV1NTFCLzBTUkxpN2wyc2t5KytaOVJBRFZUSG4rZGlBUGNhVEJ4VXpOdnhrUlVaSUQxSTdzWFZRYS9qS2Z6Zis4NlJDb29ObzczMXdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjI2MzEwCWZpbGU6RmluZEZsb3dfMC43LjBfeDY0LXNldHVwLmV4ZQpLeWNXM1luT3Y0Y0IrSU1FNTk5ZHVlZXlzdnJzZzZrV2NzQmM2aEo4Y2JHRUEweVJTT3pIM0FRVURzNXBQck5LaWZqbmp4cnc1OTUrWXdScEt1MnNCZz09Cg==",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.7.0/FindFlow-v0.7.0-win-x64-setup.exe"
+    }
+  }
+}

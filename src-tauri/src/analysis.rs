@@ -205,6 +205,70 @@ fn full_hash(p: &Path) -> Option<String> {
     Some(reader.finalize().to_hex().to_string())
 }
 
+/// 按来源目录与规则生成整理计划；`organize_suggest` 与 `organize_execute` 共用，
+/// 保证「预演所见 = 实际执行」（FR15）。
+fn build_plan(
+    db: &crate::settings::SettingsStore,
+    source_dir: &str,
+    rule_type: &str,
+    target_dir: &str,
+) -> Result<Vec<crate::models::PlanItem>, String> {
+    let rows: Vec<(i64, String, i64)> = db.with_conn(|c| {
+        let mut stmt = c
+            .prepare(
+                "SELECT file_id, path, modified_ms FROM files WHERE is_dir=0 AND path LIKE ?1 ORDER BY modified_ms DESC LIMIT 100",
+            )
+            .map_err(|e| e.to_string())?;
+        let all = stmt
+            .query_map([format!("{source_dir}\\%")], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|x| x.ok())
+            .collect();
+        Ok::<_, String>(all)
+    })?;
+    let mut items = Vec::new();
+    for (fid, path, modified_ms) in rows {
+        let p = Path::new(&path);
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let sub = match rule_type {
+            "extension" => p
+                .extension()
+                .map(|e| e.to_string_lossy().to_uppercase())
+                .unwrap_or_else(|| "OTHER".into()),
+            "date_ym" => chrono::DateTime::from_timestamp_millis(modified_ms)
+                .map(|d| d.format("%Y-%m").to_string())
+                .unwrap_or_else(|| "未知日期".into()),
+            _ => String::new(),
+        };
+        let target_name = if sub.is_empty() {
+            target_dir.to_string()
+        } else {
+            format!("{target_dir}\\{sub}")
+        };
+        let new_path = format!("{target_name}\\{name}");
+        // 底线 3：源与目标都不得落在受保护目录。
+        let (status, reason) = if crate::scope::is_protected(&crate::util::normalize_path(p))
+            || crate::scope::is_protected(&new_path)
+        {
+            ("protected", Some("受保护目录，不予整理".to_string()))
+        } else if !p.exists() {
+            ("missing", Some("源文件不存在".to_string()))
+        } else if Path::new(&new_path).exists() {
+            ("conflict", Some("目标已存在同名文件".to_string()))
+        } else {
+            ("ok", None)
+        };
+        items.push(crate::models::PlanItem {
+            file_id: fid,
+            old_path: path,
+            new_path,
+            status: status.into(),
+            reason,
+        });
+    }
+    Ok(items)
+}
+
 /// 规则式智能整理建议：按扩展名/日期归类到目标目录（FR15）。
 #[tauri::command]
 pub async fn organize_suggest(
@@ -213,46 +277,108 @@ pub async fn organize_suggest(
     rule_type: String,
     target_dir: String,
 ) -> Result<Vec<crate::models::PlanItem>, String> {
-    let rows: Vec<(i64, String)> = store.db.with_conn(|c| {
-        let mut stmt = c
-            .prepare(
-                "SELECT file_id, path FROM files WHERE is_dir=0 AND path LIKE ?1 ORDER BY modified_ms DESC LIMIT 100",
-            )
-            .map_err(|e| e.to_string())?;
-        let all = stmt
-            .query_map([format!("{source_dir}\\%")], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|e| e.to_string())?
-            .filter_map(|x| x.ok())
-            .collect();
-        Ok::<_, String>(all)
-    })?;
-    let mut items = Vec::new();
-    for (fid, path) in rows {
-        let p = Path::new(&path);
-        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let target_name = match rule_type.as_str() {
-            "extension" => {
-                let ext = p.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_else(|| "OTHER".into());
-                format!("{target_dir}\\{ext}")
-            }
-            "date_ym" => {
-                let date: Option<String> = store.db.with_conn(|c| {
-                    c.query_row("SELECT modified_ms FROM files WHERE file_id=?1", [fid], |r| r.get(0)).ok()
-                }).and_then(|ms| chrono::DateTime::from_timestamp_millis(ms).map(|d| d.format("%Y-%m").to_string()));
-                format!("{target_dir}\\{}", date.unwrap_or_else(|| "未知日期".into()))
-            }
-            _ => target_dir.clone(),
-        };
-        let new_path = format!("{target_name}\\{name}");
-        let status = if Path::new(&new_path).exists() { "conflict" } else { "ok" };
-        items.push(crate::models::PlanItem {
-            file_id: fid,
-            old_path: path,
-            new_path,
-            status: status.into(),
-            reason: None,
-        });
+    build_plan(&store.db, &source_dir, &rule_type, &target_dir)
+}
+
+/// 整理执行前的确认令牌（绑定来源目录 / 规则 / 目标目录，60 秒有效、一次性）。
+#[tauri::command]
+pub async fn organize_issue_token(
+    source_dir: String,
+    rule_type: String,
+    target_dir: String,
+) -> Result<String, String> {
+    crate::actions::issue_token(&crate::actions::fingerprint(&[
+        &source_dir,
+        &rule_type,
+        &target_dir,
+    ]))
+}
+
+/// 智能整理执行（FR15）：后端按参数重新生成计划，不信任前端传入的路径。
+/// 逐项返回结果并写 operation_log，保证可追溯（底线 2）。
+#[tauri::command]
+pub async fn organize_execute(
+    store: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    source_dir: String,
+    rule_type: String,
+    target_dir: String,
+    token: String,
+) -> Result<Vec<crate::models::PlanItem>, String> {
+    // 令牌绑定三个参数：换了目录或规则即失效，且消费后不可重放。
+    let fp = crate::actions::fingerprint(&[&source_dir, &rule_type, &target_dir]);
+    if !crate::actions::consume_token(&token, &fp) {
+        return Err("整理确认令牌无效或已过期，请重新确认".into());
     }
+    let mut items = build_plan(&store.db, &source_dir, &rule_type, &target_dir)?;
+    let op_id = crate::util::now_ms();
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    for it in items.iter_mut() {
+        if it.status != "ok" {
+            continue;
+        }
+        let dest = Path::new(&it.new_path);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                it.status = "failed".into();
+                it.reason = Some(format!("创建目录失败：{e}"));
+                failed += 1;
+                continue;
+            }
+        }
+        match std::fs::rename(&it.old_path, dest) {
+            Ok(_) => {
+                store.db.with_conn(|c| {
+                    let name = Path::new(&it.new_path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    c.execute(
+                        "UPDATE files SET path=?2, name=?3, updated_ms=?4 WHERE file_id=?1",
+                        params![it.file_id, it.new_path, name, crate::util::now_ms()],
+                    )
+                    .ok();
+                    c.execute(
+                        "INSERT INTO index_outbox(file_id, operation, created_ms) VALUES (?1,'upsert',?2)",
+                        params![it.file_id, crate::util::now_ms()],
+                    )
+                    .ok();
+                    Ok::<(), String>(())
+                })
+                .ok();
+                it.status = "ok".into();
+                it.reason = None;
+                ok += 1;
+            }
+            Err(e) => {
+                it.status = "failed".into();
+                it.reason = Some(e.to_string());
+                failed += 1;
+            }
+        }
+    }
+    store
+        .db
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO operation_log(operation_id, kind, request_json, result_json, reversible_until, created_at) VALUES (?1,'organize',?2,?3,?4,?5)",
+                params![
+                    op_id,
+                    serde_json::json!({
+                        "sourceDir": source_dir,
+                        "ruleType": rule_type,
+                        "targetDir": target_dir,
+                    })
+                    .to_string(),
+                    serde_json::json!({"ok": ok, "failed": failed, "total": items.len()}).to_string(),
+                    (chrono::Local::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                    crate::util::now_rfc3339()
+                ],
+            )
+            .ok();
+            Ok::<(), String>(())
+        })
+        .ok();
     Ok(items)
 }
 
@@ -368,27 +494,6 @@ fn dhash(p: &Path) -> Option<u64> {
     Some(hash)
 }
 
-/// 智能整理执行（默认仅建议；自动执行时保留 operation_log，FR15）。
-#[tauri::command]
-pub async fn organize_execute(items: Vec<crate::models::PlanItem>) -> Result<serde_json::Value, String> {
-    let mut ok = 0;
-    let mut failed = 0;
-    for item in &items {
-        if item.status != "ok" {
-            continue;
-        }
-        let dest = Path::new(&item.new_path);
-        if let Some(parent) = dest.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::rename(&item.old_path, dest) {
-            Ok(_) => ok += 1,
-            Err(_) => failed += 1,
-        }
-    }
-    Ok(serde_json::json!({"ok": ok, "failed": failed}))
-}
-
 pub fn _unused(_: OrganizerRule) {}
 
 #[tauri::command]
@@ -398,4 +503,121 @@ pub async fn start_duplicates_cmd(
     keep_how: String,
 ) -> Result<(), String> {
     start_duplicates_job(&store, min_size, keep_how)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db() -> crate::settings::SettingsStore {
+        crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap())
+    }
+
+    /// 临时目录放在 target/ 下：系统 temp 位于 AppData，会被 is_protected 命中。
+    fn tmpdir() -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("testtmp");
+        std::fs::create_dir_all(&base).unwrap();
+        tempfile::Builder::new().tempdir_in(&base).unwrap()
+    }
+
+    fn seed(s: &crate::settings::SettingsStore, fid: i64, path: &str, modified_ms: i64) {
+        let name = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        s.with_conn(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO scopes(scope_id, path, added_at) VALUES (1,'D:\\s','now')",
+                [],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO files(file_id, scope_id, name, path, ext, kind, size, is_dir, modified_ms, updated_ms)
+                 VALUES (?1, 1, ?2, ?3, 'txt', 'doc', 1, 0, ?4, 1)",
+                rusqlite::params![fid, name, path, modified_ms],
+            )
+            .unwrap();
+            Ok::<(), String>(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn build_plan_marks_protected_source() {
+        let s = db();
+        seed(&s, 1, r"C:\Windows\system.ini", 1_700_000_000_000);
+        let items = build_plan(&s, r"C:\Windows", "extension", r"D:\整理").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "protected");
+        assert!(items[0].reason.is_some());
+    }
+
+    #[test]
+    fn build_plan_marks_protected_target() {
+        let s = db();
+        seed(&s, 1, r"D:\s\a.txt", 1_700_000_000_000);
+        let items = build_plan(&s, r"D:\s", "extension", r"C:\Program Files").unwrap();
+        assert_eq!(items[0].status, "protected");
+    }
+
+    #[test]
+    fn build_plan_marks_missing_source() {
+        let s = db();
+        seed(&s, 1, r"D:\s\不存在.txt", 1_700_000_000_000);
+        let items = build_plan(&s, r"D:\s", "extension", r"D:\整理").unwrap();
+        assert_eq!(items[0].status, "missing");
+    }
+
+    #[test]
+    fn build_plan_ok_and_conflict_with_real_files() {
+        let dir = tmpdir();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::create_dir_all(dst.join("TXT")).unwrap();
+        let src_s = crate::util::normalize_path(&src);
+        let dst_s = crate::util::normalize_path(&dst);
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        std::fs::write(src.join("b.txt"), b"b").unwrap();
+        // b.txt 的目标位置已有同名文件 → conflict
+        std::fs::write(dst.join("TXT").join("b.txt"), b"x").unwrap();
+
+        let s = db();
+        seed(&s, 1, &format!("{src_s}\\a.txt"), 1_700_000_000_000);
+        seed(&s, 2, &format!("{src_s}\\b.txt"), 1_700_000_000_000);
+
+        let items = build_plan(&s, &src_s, "extension", &dst_s).unwrap();
+        let find = |n: &str| items.iter().find(|i| i.old_path.ends_with(n)).unwrap();
+        assert_eq!(find("a.txt").status, "ok");
+        assert_eq!(find("b.txt").status, "conflict");
+        assert_eq!(find("a.txt").new_path, format!("{dst_s}\\TXT\\a.txt"));
+    }
+
+    #[test]
+    fn build_plan_date_ym_groups_by_month() {
+        let dir = tmpdir();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let src_s = crate::util::normalize_path(&src);
+        let dst_s = crate::util::normalize_path(&dir.path().join("dst"));
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        let s = db();
+        // 1_700_000_000_000 ms = 2023-11-14 UTC
+        seed(&s, 1, &format!("{src_s}\\a.txt"), 1_700_000_000_000);
+        let items = build_plan(&s, &src_s, "date_ym", &dst_s).unwrap();
+        assert_eq!(items[0].status, "ok");
+        assert!(
+            items[0].new_path.ends_with("2023-11\\a.txt"),
+            "实际：{}",
+            items[0].new_path
+        );
+    }
+
+    #[test]
+    fn build_plan_empty_when_source_not_indexed() {
+        let s = db();
+        seed(&s, 1, r"D:\s\a.txt", 1);
+        let items = build_plan(&s, r"D:\other", "extension", r"D:\整理").unwrap();
+        assert!(items.is_empty(), "来源目录不在索引中则无计划项");
+    }
 }

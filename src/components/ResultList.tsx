@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Density } from "../types";
 import FileIcon, { FileThumb } from "./FileIcon";
 import { LocateIcon, MoreIcon, OpenIcon } from "./Icons";
-import { actionLocate, actionOpen, formatBytes, formatTime, type FileRow } from "../api";
+import { actionLocate, actionOpen, formatBytes, formatTime, getSetting, setSetting, type FileRow } from "../api";
+import { clampColWidth, DEFAULT_COL_WIDTHS, parseColWidths, type ColWidths } from "../layout";
 
 interface Props {
   items: FileRow[];
@@ -14,8 +16,12 @@ interface Props {
   onNotice: (message: string) => void;
   onMenu: (item: FileRow, pos?: { x: number; y: number }) => void;
   onOpenSettings?: () => void;
-  emptyReason?: "no-scope";
+  /** 空列表的原因：无索引位置 / 首次查询未返回 / 当前筛选下无结果；缺省为关键词无匹配 */
+  emptyReason?: "no-scope" | "loading" | "filtered";
 }
+
+/** 列宽持久化键（紧凑模式）。 */
+const COL_WIDTHS_KEY = "ui.colWidths";
 
 /** 所在目录（去掉文件名）。 */
 function parentDir(path: string): string {
@@ -41,7 +47,7 @@ function DirPath({ path }: { path: string }) {
   );
 }
 
-const COLUMNS: { id: string; label: string; className: string; sortable: boolean }[] = [
+const COLUMNS: { id: keyof ColWidths; label: string; className: string; sortable: boolean }[] = [
   { id: "name", label: "名称", className: "col-name", sortable: true },
   { id: "path", label: "路径", className: "col-path", sortable: false },
   { id: "modified", label: "修改时间", className: "col-modified", sortable: true },
@@ -61,6 +67,26 @@ export default function ResultList({
   emptyReason,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
+  const [widths, setWidths] = useState<ColWidths>(DEFAULT_COL_WIDTHS);
+  const widthsRef = useRef(widths);
+  const dragRef = useRef<{ col: keyof ColWidths; startX: number; startWidth: number } | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    widthsRef.current = widths;
+  }, [widths]);
+
+  // 读取持久化的列宽；坏数据由 parseColWidths 回落默认值。
+  useEffect(() => {
+    getSetting<unknown>(COL_WIDTHS_KEY)
+      .then((v) => {
+        if (v) setWidths(parseColWidths(v));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  // 拖拽过程中若组件卸载，清理挂在 window 上的监听与拖拽态。
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   useEffect(() => {
     listRef.current
@@ -68,19 +94,53 @@ export default function ResultList({
       ?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
+  /** 开始拖拽某一列的右边界调整宽度。 */
+  const startResize = useCallback((e: React.MouseEvent, col: keyof ColWidths) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { col, startX: e.clientX, startWidth: widthsRef.current[col] };
+    document.body.classList.add("col-resizing");
+
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const next = clampColWidth(d.col, d.startWidth + (ev.clientX - d.startX));
+      setWidths((prev) => (prev[d.col] === next ? prev : { ...prev, [d.col]: next }));
+    };
+    const onUp = () => {
+      dragCleanupRef.current?.();
+      // 松手后持久化一次，避免拖动过程中频繁写库
+      setSetting(COL_WIDTHS_KEY, widthsRef.current).catch(() => undefined);
+    };
+    dragCleanupRef.current = () => {
+      dragRef.current = null;
+      document.body.classList.remove("col-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      dragCleanupRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
   if (items.length === 0) {
+    // 首次查询还没返回：留白，避免闪一下「没有匹配的结果」
+    if (emptyReason === "loading") return <div className="result-empty" />;
     const noScope = emptyReason === "no-scope";
+    const filtered = emptyReason === "filtered";
     return (
       <div className="result-empty">
         <p className="result-empty-title">
-          {noScope ? "没有启用的索引位置" : "没有匹配的结果"}
+          {noScope ? "没有启用的索引位置" : filtered ? "当前筛选下没有结果" : "没有匹配的结果"}
         </p>
         <p className="result-empty-hint">
           {noScope
             ? "请在设置中启用或添加一个索引位置。"
-            : "尝试更短的关键词，或先把常用目录加入索引范围。"}
+            : filtered
+              ? "切换到「全部」，或换个关键词试试。"
+              : "尝试更短的关键词，或先把常用目录加入索引范围。"}
         </p>
-        {onOpenSettings ? (
+        {noScope && onOpenSettings ? (
           <button className="btn-primary result-empty-btn" onClick={onOpenSettings}>
             ＋ 添加索引范围
           </button>
@@ -136,8 +196,16 @@ export default function ResultList({
   }
 
   const comfortable = density === "comfortable";
+  // 通过 CSS 变量把列宽下发给标题行与数据行，二者共用同一组值。
+  const colVars = {
+    "--col-name": `${widths.name}px`,
+    "--col-path": `${widths.path}px`,
+    "--col-modified": `${widths.modified}px`,
+    "--col-size": `${widths.size}px`,
+  } as CSSProperties;
+
   return (
-    <div className="result-list" ref={listRef}>
+    <div className="result-list" ref={listRef} style={colVars}>
       {!comfortable ? (
         <div className="result-header">
           {COLUMNS.map((c) => (
@@ -153,6 +221,23 @@ export default function ResultList({
             >
               {c.label}
               {sort === c.id ? <span className="sort-arrow">{c.id === "name" ? "↑" : "↓"}</span> : null}
+              <span
+                className="col-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={`调整${c.label}列宽`}
+                title="拖动调整列宽，双击恢复默认"
+                onMouseDown={(e) => startResize(e, c.id)}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setWidths((prev) => {
+                    const next = { ...prev, [c.id]: DEFAULT_COL_WIDTHS[c.id] };
+                    setSetting(COL_WIDTHS_KEY, next).catch(() => undefined);
+                    return next;
+                  });
+                }}
+              />
             </div>
           ))}
           <div className="col-actions" />
