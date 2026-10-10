@@ -79,3 +79,16 @@ export function clampOverlayPos(
     top: Math.min(Math.max(margin, anchor.y), maxTop),
   };
 }
+
+/** 预览窗格宽度：默认值与可拖拽范围；列表至少保留 MIN_LIST_WIDTH，避免名称列被挤没。 */
+export const DEFAULT_PANE_WIDTH = 340;
+export const MIN_PANE_WIDTH = 240;
+export const MAX_PANE_WIDTH = 640;
+export const MIN_LIST_WIDTH = 300;
+
+/** 把窗格宽度限制在可用范围内；`areaWidth` 为列表 + 窗格所在区域的总宽。 */
+export function clampPaneWidth(width: number, areaWidth: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_PANE_WIDTH;
+  const max = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, areaWidth - MIN_LIST_WIDTH));
+  return Math.round(Math.min(max, Math.max(MIN_PANE_WIDTH, width)));
+}

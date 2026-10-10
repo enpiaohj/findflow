@@ -4,6 +4,10 @@ import test from "node:test";
 import {
   clampColWidth,
   clampOverlayPos,
+  clampPaneWidth,
+  DEFAULT_PANE_WIDTH,
+  MIN_LIST_WIDTH,
+  MIN_PANE_WIDTH,
   COL_LIMITS,
   DEFAULT_COL_WIDTHS,
   parseColWidths,
@@ -59,4 +63,14 @@ test("clampOverlayPos 在窗口比浮层还小时不产生负偏移", () => {
   const pos = clampOverlayPos({ x: 350, y: 280 }, { width: 246, height: 460 }, { width: 400, height: 300 });
   assert.ok(pos.left >= 8, `left 应 >= 8，实际 ${pos.left}`);
   assert.ok(pos.top >= 8, `top 应 >= 8，实际 ${pos.top}`);
+});
+
+test("clampPaneWidth 限制范围并为列表保留最小宽度", () => {
+  assert.equal(clampPaneWidth(100, 900), MIN_PANE_WIDTH);
+  assert.equal(clampPaneWidth(400, 900), 400);
+  // 区域 700 宽时，窗格最多 700 - 列表最小宽度
+  assert.equal(clampPaneWidth(600, 700), 700 - MIN_LIST_WIDTH);
+  // 区域过窄时仍不小于窗格最小宽度
+  assert.equal(clampPaneWidth(400, 400), MIN_PANE_WIDTH);
+  assert.equal(clampPaneWidth(Number.NaN, 900), DEFAULT_PANE_WIDTH);
 });

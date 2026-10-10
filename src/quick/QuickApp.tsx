@@ -33,6 +33,7 @@ import {
 import IdleHint from "./IdleHint";
 import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
+import { clampPaneWidth, DEFAULT_PANE_WIDTH } from "../layout";
 import {
   DEFAULT_START_VIEW,
   HIDE_BROWSE_ON_EMPTY_KEY,
@@ -46,6 +47,7 @@ import {
 
 const DENSITY_KEY = "ui.density";
 const PREVIEW_PANE_KEY = "ui.previewPane";
+const PREVIEW_PANE_WIDTH_KEY = "ui.previewPaneWidth";
 // 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
 const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
 
@@ -87,6 +89,10 @@ export default function QuickApp() {
   const [previewOpen, setPreviewOpen] = useState(false);
   // 预览窗格：搜索窗右侧常驻预览，默认关闭
   const [previewPane, setPreviewPane] = useState(false);
+  const [paneWidth, setPaneWidth] = useState(DEFAULT_PANE_WIDTH);
+  const paneWidthRef = useRef(DEFAULT_PANE_WIDTH);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [areaWidth, setAreaWidth] = useState(0);
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -186,6 +192,14 @@ export default function QuickApp() {
     getSetting<boolean>(PREVIEW_PANE_KEY)
       .then((v) => setPreviewPane(v === true))
       .catch(() => undefined);
+    getSetting<number>(PREVIEW_PANE_WIDTH_KEY)
+      .then((v) => {
+        if (typeof v === "number" && Number.isFinite(v)) {
+          paneWidthRef.current = v;
+          setPaneWidth(v);
+        }
+      })
+      .catch(() => undefined);
     getSetting<string>(DENSITY_KEY)
       .then((v) => {
         if (v === "compact" || v === "comfortable" || v === "large") setDensity(v);
@@ -278,6 +292,45 @@ export default function QuickApp() {
     },
     [hasQuery],
   );
+
+  // 跟踪结果区宽度：窗口缩小时窗格显示宽度自动收进可用范围（保存的宽度不变，窗口放大后恢复）
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setAreaWidth(el.clientWidth));
+    ro.observe(el);
+    setAreaWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, [previewPane, browseHidden]);
+
+  /** 拖拽分隔条调整预览窗格宽度：向左拖变宽；松手后持久化，双击恢复默认。 */
+  const startPaneResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    const area = areaRef.current;
+    if (!area) return;
+    const startX = event.clientX;
+    const startWidth = paneWidthRef.current;
+    document.body.classList.add("col-resizing");
+    const onMove = (e: MouseEvent) => {
+      const next = clampPaneWidth(startWidth + (startX - e.clientX), area.clientWidth);
+      paneWidthRef.current = next;
+      setPaneWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("col-resizing");
+      setSetting(PREVIEW_PANE_WIDTH_KEY, paneWidthRef.current).catch(() => undefined);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+  const resetPaneWidth = useCallback(() => {
+    paneWidthRef.current = DEFAULT_PANE_WIDTH;
+    setPaneWidth(DEFAULT_PANE_WIDTH);
+    setSetting(PREVIEW_PANE_WIDTH_KEY, DEFAULT_PANE_WIDTH).catch(() => undefined);
+  }, []);
 
   const togglePreviewPane = useCallback(() => {
     setPreviewPane((on) => {
@@ -621,7 +674,7 @@ export default function QuickApp() {
               }}
             />
           ) : (
-            <div className={"result-area" + (previewPane ? " pane-on" : "")}>
+            <div ref={areaRef} className={"result-area" + (previewPane ? " pane-on" : "")}>
             <ResultList
               items={items}
               density={density}
@@ -641,7 +694,19 @@ export default function QuickApp() {
                 browseNoScope ? "no-scope" : !searched ? "loading" : filter !== "all" ? "filtered" : undefined
               }
             />
-            {previewPane ? <PreviewPane item={items[selectedIndex] ?? null} onNotice={notice} /> : null}
+            {previewPane ? (
+              <>
+                <div
+                  className="pane-splitter"
+                  role="separator"
+                  aria-orientation="vertical"
+                  title="拖拽调整预览宽度，双击恢复默认"
+                  onMouseDown={startPaneResize}
+                  onDoubleClick={resetPaneWidth}
+                />
+                <PreviewPane item={items[selectedIndex] ?? null} onNotice={notice} width={areaWidth > 0 ? clampPaneWidth(paneWidth, areaWidth) : paneWidth} />
+              </>
+            ) : null}
             </div>
           )}
           <FooterBar
