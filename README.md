@@ -2,7 +2,7 @@
 
 Windows 本地优先的极速文件搜索与轻量文件处理工具。全局快捷键（默认 Alt + Q）呼出紧凑悬浮窗，在不打断当前工作的前提下完成查找、筛选、预览、定位与常用文件操作——把「找到文件到完成动作」压缩到数秒以内。
 
-> **当前版本**：v0.8.1（2026-10-10）。安装包见 [Releases](../../releases)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+> **当前版本**：v0.8.2（2026-10-10）。安装包见 [Releases](../../releases)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 > 本项目以 [MIT](LICENSE) 许可证发布，第三方组件见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
 
 ## 目录

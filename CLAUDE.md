@@ -6,7 +6,7 @@
 
 - **产品名**：FindFlow
 - **仓库**：`findflow`（GitHub：`enpiaohj/findflow`，**Public**，MIT 许可证，默认分支 `main`）。2026-10-10 由用户决定转为公开；不得擅自修改可见性。
-- **版本**：Semantic Versioning。当前 `v0.8.1` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
+- **版本**：Semantic Versioning。当前 `v0.8.2` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
 - **Commit**：Conventional Commits（`feat:` / `fix:` / `perf:` / `docs:` / `build:` / `test:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
 - **提交身份**：本仓库只用 GitHub noreply 地址 `250103182+enpiaohj@users.noreply.github.com` 提交（本地 git 已配置）。用户明确要求「不体现邮箱地址」，任何提交、tag、文档中都不得出现真实邮箱。
 - **发布产物**：安装包不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/`、`CHANGELOG.md`、`SHA256SUMS.txt`、`latest.json`、`.sig` 入库，安装包上传 GitHub Releases）。
