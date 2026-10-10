@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Density } from "../types";
 import FileIcon, { FileThumb } from "./FileIcon";
-import { LocateIcon, MoreIcon, OpenIcon } from "./Icons";
+import { DatabaseIcon, LocateIcon, MoreIcon, OpenIcon, SearchIcon, SlidersIcon } from "./Icons";
 import { actionLocate, actionOpen, formatBytes, formatTime, getSetting, setSetting, type FileRow } from "../api";
+import { queryTerms, splitHighlight } from "../highlight";
 import { clampColWidth, DEFAULT_COL_WIDTHS, parseColWidths, type ColWidths } from "../layout";
 
 interface Props {
@@ -18,6 +19,26 @@ interface Props {
   onOpenSettings?: () => void;
   /** 空列表的原因：无索引位置 / 首次查询未返回 / 当前筛选下无结果；缺省为关键词无匹配 */
   emptyReason?: "no-scope" | "loading" | "filtered";
+  /** 当前查询串，用于高亮名称中的命中词 */
+  query?: string;
+}
+
+/** 名称中的命中词高亮。 */
+function Highlighted({ text, terms }: { text: string; terms: string[] }) {
+  if (terms.length === 0) return <>{text}</>;
+  return (
+    <>
+      {splitHighlight(text, terms).map((seg, i) =>
+        seg.hit ? (
+          <mark key={i} className="hl">
+            {seg.text}
+          </mark>
+        ) : (
+          seg.text
+        ),
+      )}
+    </>
+  );
 }
 
 /** 列宽持久化键（紧凑模式）。 */
@@ -65,7 +86,9 @@ export default function ResultList({
   onMenu,
   onOpenSettings,
   emptyReason,
+  query = "",
 }: Props) {
+  const terms = useMemo(() => queryTerms(query), [query]);
   const listRef = useRef<HTMLDivElement>(null);
   const [widths, setWidths] = useState<ColWidths>(DEFAULT_COL_WIDTHS);
   const widthsRef = useRef(widths);
@@ -130,6 +153,9 @@ export default function ResultList({
     const filtered = emptyReason === "filtered";
     return (
       <div className="result-empty">
+        <span className="result-empty-icon" aria-hidden="true">
+          {noScope ? <DatabaseIcon size={26} /> : filtered ? <SlidersIcon size={26} /> : <SearchIcon size={26} />}
+        </span>
         <p className="result-empty-title">
           {noScope ? "没有启用的索引位置" : filtered ? "当前筛选下没有结果" : "没有匹配的结果"}
         </p>
@@ -184,7 +210,7 @@ export default function ResultList({
               height={112}
             />
             <div className="result-card-name" title={item.name}>
-              {item.name}
+              <Highlighted text={item.name} terms={terms} />
             </div>
             <div className="result-card-meta">
               {item.isDir ? "文件夹" : formatBytes(item.size)} ｜ {formatTime(item.modifiedMs)}
@@ -265,7 +291,7 @@ export default function ResultList({
             />
             <div className="result-text">
               <div className="result-name" title={item.name}>
-                {item.name}
+                <Highlighted text={item.name} terms={terms} />
                 {item.favorite ? <span className="fav-star"> ★</span> : null}
               </div>
               {comfortable ? (

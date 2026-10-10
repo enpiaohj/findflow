@@ -587,6 +587,7 @@ export default function QuickApp() {
                 setMenuFor(item);
               }}
               onOpenSettings={() => setSettingsOpen(true)}
+              query={query}
               emptyReason={
                 browseNoScope ? "no-scope" : !searched ? "loading" : filter !== "all" ? "filtered" : undefined
               }
