@@ -7,6 +7,7 @@ import FooterBar from "../components/FooterBar";
 import { Toast } from "../components/Toast";
 import { ArrowLeftIcon, ChevronDownIcon, CloseIcon, SearchIcon } from "../components/Icons";
 import PreviewOverlay from "./PreviewOverlay";
+import PreviewPane from "./PreviewPane";
 import ResultMenu from "./ResultMenu";
 import FilterBar, { type FilterId } from "../components/FilterBar";
 import ManageBody from "../manage/ManageBody";
@@ -44,6 +45,7 @@ import {
 } from "../startView";
 
 const DENSITY_KEY = "ui.density";
+const PREVIEW_PANE_KEY = "ui.previewPane";
 // 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
 const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
 
@@ -83,6 +85,8 @@ export default function QuickApp() {
   const [toast, setToast] = useState<string | null>(null);
   // 预览始终展示当前选中项，方向键切换即切换预览文件
   const [previewOpen, setPreviewOpen] = useState(false);
+  // 预览窗格：搜索窗右侧常驻预览，默认关闭
+  const [previewPane, setPreviewPane] = useState(false);
   const [menuFor, setMenuFor] = useState<FileRow | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -179,6 +183,9 @@ export default function QuickApp() {
   }, [notice]);
 
   useEffect(() => {
+    getSetting<boolean>(PREVIEW_PANE_KEY)
+      .then((v) => setPreviewPane(v === true))
+      .catch(() => undefined);
     getSetting<string>(DENSITY_KEY)
       .then((v) => {
         if (v === "compact" || v === "comfortable" || v === "large") setDensity(v);
@@ -271,6 +278,13 @@ export default function QuickApp() {
     },
     [hasQuery],
   );
+
+  const togglePreviewPane = useCallback(() => {
+    setPreviewPane((on) => {
+      setSetting(PREVIEW_PANE_KEY, !on).catch(() => undefined);
+      return !on;
+    });
+  }, []);
 
   const changeDensity = useCallback((next: Density) => {
     setDensity(next);
@@ -419,6 +433,11 @@ export default function QuickApp() {
         inputEl.selectionEnd !== null &&
         inputEl.selectionStart !== inputEl.selectionEnd;
 
+      if (event.altKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        togglePreviewPane();
+        return;
+      }
       if (event.key === "Escape" && historyOpen) {
         event.preventDefault();
         setHistoryOpen(false);
@@ -477,7 +496,7 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, settingsOpen, notice, recordSearchTerm]
+    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, settingsOpen, notice, recordSearchTerm, togglePreviewPane]
   );
 
   return (
@@ -591,6 +610,8 @@ export default function QuickApp() {
             limited={items.length >= 200}
             filtered={hasQuery || filter !== "all"}
             shown={items.length}
+            previewPane={previewPane}
+            onTogglePreviewPane={togglePreviewPane}
           />
           {browseHidden ? (
             <IdleHint
@@ -600,6 +621,7 @@ export default function QuickApp() {
               }}
             />
           ) : (
+            <div className={"result-area" + (previewPane ? " pane-on" : "")}>
             <ResultList
               items={items}
               density={density}
@@ -619,6 +641,8 @@ export default function QuickApp() {
                 browseNoScope ? "no-scope" : !searched ? "loading" : filter !== "all" ? "filtered" : undefined
               }
             />
+            {previewPane ? <PreviewPane item={items[selectedIndex] ?? null} onNotice={notice} /> : null}
+            </div>
           )}
           <FooterBar
             item={browseHidden ? null : items[selectedIndex] ?? null}

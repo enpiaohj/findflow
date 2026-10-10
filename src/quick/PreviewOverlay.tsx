@@ -29,15 +29,15 @@ const KIND_LABELS: Record<string, string> = {
   folder: "文件夹",
 };
 
-function typeLabel(item: FileRow): string {
+export function typeLabel(item: FileRow): string {
   if (item.isDir) return "文件夹";
   if (item.kind === "pdf") return KIND_LABELS.pdf;
   const ext = item.ext ? item.ext.toUpperCase() + " " : "";
   return ext + (KIND_LABELS[item.kind] ?? "文件");
 }
 
-export default function PreviewOverlay({ item, onClose, onNotice }: Props) {
-  const path = item.path;
+/** 取预览内容。`delay` 用于预览窗格：连续切换选中项时只为停下来的那一项生成预览。 */
+export function usePreviewPayload(path: string, delay = 0) {
   const [payload, setPayload] = useState<PreviewPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,13 +45,55 @@ export default function PreviewOverlay({ item, onClose, onNotice }: Props) {
     setPayload(null);
     setError(null);
     let alive = true;
-    previewGet(path)
-      .then((p) => alive && setPayload(p))
-      .catch((e) => alive && setError(String(e)));
+    const timer = window.setTimeout(() => {
+      previewGet(path)
+        .then((p) => alive && setPayload(p))
+        .catch((e) => alive && setError(String(e)));
+    }, delay);
     return () => {
       alive = false;
+      window.clearTimeout(timer);
     };
-  }, [path]);
+  }, [path, delay]);
+
+  return { payload, error };
+}
+
+/** 预览内容区（图片 / 缩略图 / 文本 / 暂不支持），浮层与预览窗格共用。 */
+export function PreviewBody({
+  item,
+  payload,
+  error,
+}: {
+  item: FileRow;
+  payload: PreviewPayload | null;
+  error: string | null;
+}) {
+  return (
+    <>
+      {error ? <div className="preview-fallback">预览失败：{error}</div> : null}
+      {!error && !payload ? <div className="preview-fallback">正在生成预览…</div> : null}
+      {(payload?.kind === "image" || payload?.kind === "thumbnail") && payload.data ? (
+        <img src={`data:image/png;base64,${payload.data}`} alt={payload.name} />
+      ) : null}
+      {payload?.kind === "text" && payload.data !== null ? <pre className="preview-text">{payload.data}</pre> : null}
+      {payload && payload.kind === "none" ? (
+        <div className="preview-fallback">
+          <FileIcon path={item.path} ext={item.ext} isDir={item.isDir} kind={item.kind} size={96} />
+          <p>该类型暂不支持内容预览</p>
+          <p className="preview-hint">{payload.reason ?? "按 Enter 使用默认应用打开"}</p>
+        </div>
+      ) : null}
+      {payload && payload.kind !== "text" && payload.kind !== "none" && payload.reason ? (
+        <div className="preview-reason">{payload.reason}</div>
+      ) : null}
+    </>
+  );
+}
+
+export default function PreviewOverlay({ item, onClose, onNotice }: Props) {
+  const path = item.path;
+  const { payload, error } = usePreviewPayload(path);
 
   const run = (p: Promise<string>) => p.then((m) => onNotice(m)).catch((e) => onNotice(String(e)));
 
@@ -60,24 +102,7 @@ export default function PreviewOverlay({ item, onClose, onNotice }: Props) {
       <div className="preview-panel">
         <div className="preview-main">
           <div className="preview-body">
-            {error ? <div className="preview-fallback">预览失败：{error}</div> : null}
-            {!error && !payload ? <div className="preview-fallback">正在生成预览…</div> : null}
-            {(payload?.kind === "image" || payload?.kind === "thumbnail") && payload.data ? (
-              <img src={`data:image/png;base64,${payload.data}`} alt={payload.name} />
-            ) : null}
-            {payload?.kind === "text" && payload.data !== null ? (
-              <pre className="preview-text">{payload.data}</pre>
-            ) : null}
-            {payload && payload.kind === "none" ? (
-              <div className="preview-fallback">
-                <FileIcon path={path} ext={item.ext} isDir={item.isDir} kind={item.kind} size={96} />
-                <p>该类型暂不支持内容预览</p>
-                <p className="preview-hint">{payload.reason ?? "按 Enter 使用默认应用打开"}</p>
-              </div>
-            ) : null}
-            {payload && payload.kind !== "text" && payload.kind !== "none" && payload.reason ? (
-              <div className="preview-reason">{payload.reason}</div>
-            ) : null}
+            <PreviewBody item={item} payload={payload} error={error} />
           </div>
           <div className="preview-footer">
             <kbd>←</kbd>

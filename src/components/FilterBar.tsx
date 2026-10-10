@@ -1,4 +1,5 @@
 import type { Density } from "../types";
+import { PaneIcon } from "./Icons";
 
 export const FILTERS = [
   { id: "all", label: "全部" },
@@ -34,6 +35,9 @@ interface Props {
   filtered?: boolean;
   /** 本次实际列出的条数；仅在 truncated 时用于说明「共 N 项 · 显示前 M 项」 */
   shown?: number;
+  /** 预览窗格是否开启（默认关闭） */
+  previewPane?: boolean;
+  onTogglePreviewPane?: () => void;
 }
 
 export default function FilterBar({
@@ -45,6 +49,8 @@ export default function FilterBar({
   limited,
   filtered,
   shown,
+  previewPane = false,
+  onTogglePreviewPane,
 }: Props) {
   const noun = filtered ? "命中" : "共";
   return (
@@ -75,6 +81,16 @@ export default function FilterBar({
               : `${noun} ${count.toLocaleString()} 项`}
           </span>
         )}
+        {onTogglePreviewPane ? (
+          <button
+            className={"pane-toggle" + (previewPane ? " pane-toggle-on" : "")}
+            title={previewPane ? "关闭预览窗格（Alt+P）" : "开启预览窗格（Alt+P）"}
+            aria-pressed={previewPane}
+            onClick={onTogglePreviewPane}
+          >
+            <PaneIcon size={16} />
+          </button>
+        ) : null}
         <div className="density-switch" role="group" aria-label="显示密度">
           {DENSITIES.map((d) => (
             <button

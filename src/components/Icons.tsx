@@ -105,6 +105,16 @@ export function CopyIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** 预览窗格开关：窗口加右侧窗格。 */
+export function PaneIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="3" y="4" width="14" height="12" rx="2" />
+      <path d="M12 4v12" />
+    </Svg>
+  );
+}
+
 /* ---------- 管理窗导航 ---------- */
 
 export function ChartIcon({ size = 18 }: { size?: number }) {
