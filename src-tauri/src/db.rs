@@ -166,7 +166,14 @@ const MIGRATIONS: &[&str] = &[
      UPDATE files SET kind='audio' WHERE kind='other' AND ext IN
         ('oga','mka','caf','weba','ra');
      UPDATE files SET kind='archive' WHERE kind='other' AND ext IN
-        ('tgz','txz','zst','lz4','lz','br','cab','iso','arj','lzh');"
+        ('tgz','txz','zst','lz4','lz','br','cab','iso','arj','lzh');",
+    // v6：名称索引改为不分大小写。
+    // 界面一律按 `name COLLATE NOCASE` 排序，而原 idx_files_name 是默认（区分大小写）排序规则，
+    // 排序时根本用不上——按名称浏览要把全表读进临时 B 树（实测 85 万行约 80ms）。
+    // 换成 NOCASE 后按名称排序可直接沿索引走（约 0.4ms），也是「边走边筛」快路径按名称排序的前提。
+    // 一换一，索引数量与体积不变；构建约 1 秒 / 百万行。
+    "CREATE INDEX IF NOT EXISTS idx_files_name_nocase ON files(name COLLATE NOCASE);
+     DROP INDEX IF EXISTS idx_files_name;"
 ];
 
 pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
@@ -323,6 +330,32 @@ mod tests {
                 .unwrap();
             assert_eq!(got, want, "{ext} 的 kind 应为 {want}");
         }
+    }
+
+    #[test]
+    fn migrate_v6_replaces_name_index_with_nocase() {
+        let conn = open_in_memory().unwrap();
+        let has = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(has("idx_files_name_nocase"), 1);
+        assert_eq!(has("idx_files_name"), 0, "旧的区分大小写索引应被替换，不留两份");
+        // 按名称（不分大小写）排序应直接走索引，不建临时 B 树
+        let plan: Vec<String> = conn
+            .prepare("EXPLAIN QUERY PLAN SELECT file_id FROM files ORDER BY name COLLATE NOCASE ASC, file_id ASC LIMIT 20")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        let plan = plan.join(" / ");
+        assert!(plan.contains("idx_files_name_nocase"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     }
 
     #[test]

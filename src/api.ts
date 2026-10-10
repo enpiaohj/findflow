@@ -22,6 +22,8 @@ export interface SearchResponse {
   items: FileRow[];
   /** 命中总数；只返回前 N 条时用它说明实际有多少条命中 */
   matched: number;
+  /** 命中数统计超时：`matched` 暂为已列出的条数（下限），精确值用 searchCount 补取 */
+  matchedPending?: boolean;
   /** 索引总数（页脚「索引 N 条」） */
   total: number;
   elapsedMs: number;
@@ -90,6 +92,10 @@ export const search = (
   limit?: number,
   scopeId?: number
 ): Promise<SearchResponse> => invoke("cmd_search", { query, sort, limit, scopeId });
+
+/** 精确命中数（不取列表）。仅在搜索结果带 matchedPending 时调用。 */
+export const searchCount = (query: string, scopeId?: number): Promise<number> =>
+  invoke("cmd_search_count", { query, scopeId });
 
 export const nlParse = (text: string): Promise<{ ast: unknown; confidence: number; explain: string[] }> =>
   invoke("cmd_nl_parse", { text });

@@ -355,6 +355,7 @@ pub fn run() {
             scanner::cmd_recalibrate,
             scanner::cmd_rebuild,
             search::cmd_search,
+            search::cmd_search_count,
             nlq::cmd_nl_parse,
             llm::llm_has_key,
             llm::llm_set_key,

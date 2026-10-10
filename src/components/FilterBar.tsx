@@ -35,6 +35,8 @@ interface Props {
   filtered?: boolean;
   /** 本次实际列出的条数；仅在 truncated 时用于说明「共 N 项 · 显示前 M 项」 */
   shown?: number;
+  /** 命中数仍在统计：数字是下限，显示为「N+」 */
+  countPending?: boolean;
   /** 预览窗格是否开启（默认关闭） */
   previewPane?: boolean;
   onTogglePreviewPane?: () => void;
@@ -49,6 +51,7 @@ export default function FilterBar({
   limited,
   filtered,
   shown,
+  countPending = false,
   previewPane = false,
   onTogglePreviewPane,
 }: Props) {
@@ -71,14 +74,19 @@ export default function FilterBar({
           <span
             className="filterbar-count"
             title={
-              limited
-                ? `共命中 ${count.toLocaleString()} 项，此处仅列出最相关的前 ${(shown ?? count).toLocaleString()} 项，可继续输入缩小范围`
-                : undefined
+              countPending
+                ? "正在统计精确的命中数…"
+                : limited
+                  ? `共命中 ${count.toLocaleString()} 项，此处仅列出最相关的前 ${(shown ?? count).toLocaleString()} 项，可继续输入缩小范围`
+                  : undefined
             }
           >
-            {limited && shown !== undefined
-              ? `${noun} ${count.toLocaleString()} 项 · 显示前 ${shown.toLocaleString()}`
-              : `${noun} ${count.toLocaleString()} 项`}
+            {countPending
+              ? // 精确命中数还在后台统计：列表不等它，先给出下限
+                `${noun} ${count.toLocaleString()}+ 项`
+              : limited && shown !== undefined
+                ? `${noun} ${count.toLocaleString()} 项 · 显示前 ${shown.toLocaleString()}`
+                : `${noun} ${count.toLocaleString()} 项`}
           </span>
         )}
         {onTogglePreviewPane ? (

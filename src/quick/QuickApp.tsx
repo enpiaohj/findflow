@@ -16,6 +16,7 @@ import { recycleItem } from "./itemActions";
 import ManageBody from "../manage/ManageBody";
 import {
   search as apiSearch,
+  searchCount,
   getSetting,
   setSetting,
   actionOpen,
@@ -83,6 +84,8 @@ export default function QuickApp() {
   const [items, setItems] = useState<FileRow[]>([]);
   // 是否已收到过一次搜索结果：此前列表为空只是「还没查完」，不能显示「没有匹配的结果」
   const [stale, setStale] = useState(false);
+  // 命中数还在后台统计：先显示「N+」，算完再换成精确值
+  const [matchedPending, setMatchedPending] = useState(false);
   const [searched, setSearched] = useState(false);
   const [total, setTotal] = useState(0);
   // 空搜索隐藏结果时状态栏显示的全库索引总数（未取到前为 null，不显示）
@@ -370,6 +373,7 @@ export default function QuickApp() {
       const hiddenGen = ++searchGen.current;
       setItems([]);
       setMatched(0);
+      setMatchedPending(false);
       setElapsed(0);
       setTotal(0);
       if (browseHidden) {
@@ -397,6 +401,16 @@ export default function QuickApp() {
         setItems(response.items);
         setSearched(true);
         setMatched(response.matched);
+        setMatchedPending(response.matchedPending === true);
+        if (response.matchedPending) {
+          searchCount(q, scopeId)
+            .then((n) => {
+              if (gen !== searchGen.current) return;
+              setMatched(n);
+              setMatchedPending(false);
+            })
+            .catch(() => undefined);
+        }
         setTotal(response.total);
         setElapsed(response.elapsedMs);
       })
@@ -998,6 +1012,7 @@ export default function QuickApp() {
             limited={items.length >= 200}
             filtered={hasQuery || filter !== "all"}
             shown={items.length}
+            countPending={matchedPending}
             previewPane={previewPane}
             onTogglePreviewPane={togglePreviewPane}
           />

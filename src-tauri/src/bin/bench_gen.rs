@@ -212,12 +212,25 @@ fn run_query_bench(
 ) {
     let ast = findflow_lib::query::parse(q);
     let mut samples: Vec<u128> = Vec::new();
+    let mut pending = 0usize;
     for _ in 0..rounds {
         let t = Instant::now();
-        let outcome = findflow_lib::search::run(store, index, &ast, 20, None).expect("查询失败");
-        samples.push(t.elapsed().as_millis());
+        // 与界面搜索一致：交互策略、每次取 200 条
+        let outcome = findflow_lib::search::run_opts(
+            store,
+            index,
+            &ast,
+            200,
+            None,
+            findflow_lib::search::Tuning::INTERACTIVE,
+        )
+        .expect("查询失败");
+        samples.push(t.elapsed().as_micros());
+        if outcome.matched_pending {
+            pending += 1;
+        }
         if samples.len() == 1 {
-            println!("结果 {} 项（总数 {}）", outcome.items.len(), outcome.total);
+            println!("结果 {} 项（命中 {}，总数 {}）", outcome.items.len(), outcome.matched, outcome.total);
         }
     }
     samples.sort();
@@ -225,11 +238,14 @@ fn run_query_bench(
         let idx = ((samples.len() as f64 - 1.0) * ratio).round() as usize;
         samples[idx.min(samples.len() - 1)]
     };
+    let ms = |us: u128| us as f64 / 1000.0;
     println!(
-        "查询 \"{q}\" {} 轮：P50={}ms P95={}ms P99={}ms",
+        "查询 \"{q}\" {} 轮：P50={:.1}ms P95={:.1}ms P99={:.1}ms；计数待定 {}/{}",
         rounds,
-        p(0.50),
-        p(0.95),
-        p(0.99)
+        ms(p(0.50)),
+        ms(p(0.95)),
+        ms(p(0.99)),
+        pending,
+        rounds
     );
 }
