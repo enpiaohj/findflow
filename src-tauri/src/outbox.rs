@@ -118,6 +118,13 @@ fn recover_applied(bg: &DbHandleArc) {
 /// 提交并清理。只有提交成功才删除已写入的事件：提交失败时文档尚未落盘，
 /// 删掉事件等于永久丢失，只能等下一次全量重建才能找回。返回是否提交成功。
 fn commit_and_reload(state: &crate::AppState, bg: &DbHandleArc) -> bool {
+    // 写入阶段写入器就已失效并被重建：此前写入的文档丢在旧写入器里，
+    // 绝不能在新写入器上「提交成功」后把对应事件删掉——先重置回 pending 重放。
+    if state.index.take_writer_reset() {
+        tracing::warn!("索引写入器曾失效，已写入未提交的事件重置为待处理并重放");
+        recover_applied(bg);
+        return false;
+    }
     match state.index.commit() {
         Ok(()) => {
             // 一次成功提交会落盘 writer 队列中的全部文档，故可清掉所有已写入事件
@@ -130,6 +137,10 @@ fn commit_and_reload(state: &crate::AppState, bg: &DbHandleArc) -> bool {
         }
         Err(e) => {
             tracing::warn!("索引提交失败，事件保留待重放: {e}");
+            // 提交失败会丢弃写入器：旧写入器里未落盘的文档已丢失，立即重放而不是等重启
+            if state.index.take_writer_reset() {
+                recover_applied(bg);
+            }
             false
         }
     }
@@ -297,6 +308,27 @@ mod tests {
     /// 核心不变式：事件在提交成功之前绝不能消失。
     /// 此前实现是先删事件再提交，提交失败（杀毒软件瞬时占用、磁盘满）时
     /// 文档还没落盘而事件已删除，索引与数据库静默不一致。
+    #[test]
+    fn writer_reset_replays_applied_events_instead_of_deleting_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        seed_events(&state.bg_db, 3);
+        mark_applied(&state.bg_db, 1, 3);
+        // 模拟写入器失效被丢弃：旧写入器里这 3 篇文档已丢失
+        {
+            let mut slot = state.index.writer.lock().unwrap();
+            state.index.discard_writer(&mut slot);
+        }
+        // 新写入器上的提交会「成功」，但绝不能据此删除事件：先重置回 pending 重放
+        assert!(!commit_and_reload(&state, &state.bg_db));
+        assert_eq!(count(&state.bg_db, None), 3, "事件不得被删除");
+        assert_eq!(count(&state.bg_db, Some("pending")), 3);
+        // 重放（重新写入并标记）后正常提交、清理
+        mark_applied(&state.bg_db, 1, 3);
+        assert!(commit_and_reload(&state, &state.bg_db));
+        assert_eq!(count(&state.bg_db, None), 0);
+    }
+
     #[test]
     fn events_survive_until_commit_succeeds() {
         let dir = tempfile::tempdir().unwrap();

@@ -12,7 +12,10 @@ use crate::tokenizer;
 pub struct SearchIndex {
     pub fresh: bool,
     pub index: Index,
-    pub writer: std::sync::Mutex<IndexWriter>,
+    /// `None` 表示写入器已失效、待重建（见 `add` / `commit` 的错误处理）。
+    pub writer: std::sync::Mutex<Option<IndexWriter>>,
+    /// 写入器因 I/O 错误被丢弃过：其内存队列里「已写入未提交」的文档已丢失，需要由 outbox 重放。
+    writer_reset: std::sync::atomic::AtomicBool,
     pub reader: IndexReader,
     pub fid: tantivy::schema::Field,
     pub name: tantivy::schema::Field,
@@ -116,7 +119,8 @@ impl SearchIndex {
         Ok(Self {
             fresh,
             index,
-            writer: std::sync::Mutex::new(writer),
+            writer: std::sync::Mutex::new(Some(writer)),
+            writer_reset: std::sync::atomic::AtomicBool::new(false),
             reader,
             fid,
             name,
@@ -168,29 +172,68 @@ impl SearchIndex {
         d
     }
 
+    /// 取得可用的写入器；失效后首次调用时重建。
+    /// Tantivy 的写入线程一旦遇到 I/O 错误（典型：杀毒软件瞬时占用新建的段文件，
+    /// `PermissionDenied`）整个 `IndexWriter` 就被「杀死」，之后所有写入与提交都会失败，
+    /// 只能丢弃并重建——此前只有重启应用才会恢复，期间新文件一直搜不到。
+    fn ensure_writer<'a>(&self, slot: &'a mut Option<IndexWriter>) -> Result<&'a mut IndexWriter, String> {
+        if slot.is_none() {
+            // 旧写入器已在丢弃时释放了索引目录锁，可以重建
+            *slot = Some(
+                self.index
+                    .writer_with_num_threads(1, 64 * 1024 * 1024)
+                    .map_err(|e| e.to_string())?,
+            );
+            tracing::warn!("索引写入器已重建");
+        }
+        Ok(slot.as_mut().expect("writer just ensured"))
+    }
+
+    /// 丢弃失效的写入器，并标记需要重放「已写入未提交」的事件。
+    pub(crate) fn discard_writer(&self, slot: &mut Option<IndexWriter>) {
+        *slot = None;
+        self.writer_reset
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 写入器是否被丢弃过（读取即清除）。为真时，丢弃前写入的文档已丢失，调用方应把对应事件重放。
+    pub fn take_writer_reset(&self) -> bool {
+        self.writer_reset
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn add(&self, document: TantivyDocument) -> Result<(), String> {
-        self.writer
-            .lock()
-            .unwrap()
-            .add_document(document)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        let mut slot = self.writer.lock().unwrap();
+        let result = self.ensure_writer(&mut slot)?.add_document(document);
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if matches!(e, tantivy::TantivyError::ErrorInThread(_)) {
+                    self.discard_writer(&mut slot);
+                }
+                Err(e.to_string())
+            }
+        }
     }
 
     pub fn delete(&self, fid: u64) {
-        self.writer
-            .lock()
-            .unwrap()
-            .delete_term(Term::from_field_u64(self.fid, fid));
+        let mut slot = self.writer.lock().unwrap();
+        if let Ok(w) = self.ensure_writer(&mut slot) {
+            w.delete_term(Term::from_field_u64(self.fid, fid));
+        }
     }
 
     pub fn commit(&self) -> Result<(), String> {
-        self.writer
-            .lock()
-            .unwrap()
-            .commit()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        let mut slot = self.writer.lock().unwrap();
+        let result = self.ensure_writer(&mut slot)?.commit();
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // 提交失败后写入器状态不可信（线程已被杀死，或半途失败），一律重建
+                self.discard_writer(&mut slot);
+                Err(e.to_string())
+            }
+        }
     }
 
     pub fn reload(&self) {
@@ -432,5 +475,34 @@ mod tests {
         let hits = idx.candidate_docs(q.as_ref(), 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, 7);
+    }
+
+    /// 写入器因 I/O 错误被丢弃后，下一次写入自动重建，之后的提交正常；
+    /// 丢弃前「已写入未提交」的文档确实丢失，并通过标志告知调用方重放。
+    #[test]
+    fn writer_is_rebuilt_after_being_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+        idx.add(idx.build_doc(1, "甲方案.docx", None, None)).unwrap();
+        idx.commit().unwrap();
+        idx.add(idx.build_doc(2, "乙方案.docx", None, None)).unwrap(); // 未提交
+        {
+            let mut slot = idx.writer.lock().unwrap();
+            idx.discard_writer(&mut slot);
+        }
+        assert!(idx.take_writer_reset(), "应标记写入器被丢弃");
+        assert!(!idx.take_writer_reset(), "标志读取即清除");
+        idx.add(idx.build_doc(3, "丙方案.docx", None, None)).unwrap(); // 自动重建
+        idx.commit().unwrap();
+        idx.reload();
+        let q = idx.build_query("方案", None, false);
+        let mut ids: Vec<u64> = idx
+            .candidate_docs(q.as_ref(), 10)
+            .unwrap()
+            .iter()
+            .map(|h| h.0)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3], "丢弃前未提交的文档 2 丢失，其余正常");
     }
 }
