@@ -22,6 +22,7 @@ import {
   actionLocate,
   actionCopyPath,
   actionCopyFiles,
+  pathProbe,
   appExit,
   favoriteToggle,
   scanStatus,
@@ -36,7 +37,7 @@ import {
   removeSearch,
 } from "../searchHistory";
 import IdleHint, { TIPS } from "./IdleHint";
-import { folderFilterOf, withPathFilter } from "../searchScope";
+import { folderFilterOf, pathQueryOf, withPathFilter } from "../searchScope";
 import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import { clampPaneWidth, DEFAULT_PANE_WIDTH } from "../layout";
@@ -105,6 +106,8 @@ export default function QuickApp() {
   const [settingsPage, setSettingsPage] = useState<string | undefined>(undefined);
   const [menubarOpen, setMenubarOpen] = useState(false);
   const [renameFor, setRenameFor] = useState<FileRow | null>(null);
+  const navigatedRef = useRef(false);
+  const [navigated, setNavigated] = useState(false);
   const { confirm, confirmEl } = useConfirm();
   const [hotkey, setHotkey] = useState("Alt+Q");
   const [clearOnHide, setClearOnHide] = useState(false);
@@ -281,6 +284,8 @@ export default function QuickApp() {
   }, [recordSearchTerm]);
 
   const hasQuery = query.trim().length > 0;
+  // 搜索框里整体是个绝对路径：列出该目录内容，Enter 直接打开该路径（用方向键选过某项后则打开所选项）
+  const pathMode = pathQueryOf(query);
   const queryDefaults = getStartViewQueryDefaults(startView, hasQuery);
   // 点了筛选按钮即「按条件找文件」：跨全部启用的索引位置，默认按修改时间（最近优先）；
   // 「大文件」启动视图仍按大小。只有未选筛选的空搜索才是「浏览默认索引位置」。
@@ -357,7 +362,9 @@ export default function QuickApp() {
   const runSearch = useCallback(() => {
     if (!startViewReady) return;
 
-    const q = [query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
+    const q = [pathMode ? `path:"${pathMode}"` : query, FILTER_QUERY[filter]].filter(Boolean).join(" ");
+    // 路径模式没有文本相关度，相关度排序改按名称
+    const sortForQuery = pathMode && activeSort === "relevance" ? "name" : activeSort;
     const scopeId = filter === "all" ? queryDefaults.scopeId : undefined;
     if (browseNoScope || browseHidden) {
       const hiddenGen = ++searchGen.current;
@@ -382,7 +389,7 @@ export default function QuickApp() {
     const staleTimer = window.setTimeout(() => {
       if (gen === searchGen.current) setStale(true);
     }, 150);
-    apiSearch(q, activeSort === "relevance" ? undefined : activeSort, 200, scopeId)
+    apiSearch(q, sortForQuery === "relevance" ? undefined : sortForQuery, 200, scopeId)
       .then((response) => {
         window.clearTimeout(staleTimer);
         if (gen !== searchGen.current) return;
@@ -405,12 +412,18 @@ export default function QuickApp() {
     filter,
     hasQuery,
     notice,
+    pathMode,
     query,
     queryDefaults.scopeId,
     startView.mode,
     startView.scopeId,
     startViewReady,
   ]);
+
+  useEffect(() => {
+    navigatedRef.current = false;
+    setNavigated(false);
+  }, [query]);
 
   // 搜索：50ms 防抖（设计文档 §3.2）
   useEffect(() => {
@@ -511,14 +524,32 @@ export default function QuickApp() {
       }
       if (event.key === "ArrowDown" && items.length > 0) {
         event.preventDefault();
+        navigatedRef.current = true;
+        setNavigated(true);
         setSelectedIndex((index) => Math.min(index + 1, items.length - 1));
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
+        navigatedRef.current = true;
+        setNavigated(true);
         setSelectedIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "Enter" && !hasTextSelection) {
         event.preventDefault();
         // 明确的回车动作视为一次搜索提交，记录进历史（去重由 recordSearch 处理）
         if (hasQuery) recordSearchTerm(query);
+        // 直接输入了路径：先确认存在，再隐藏窗口并用系统默认方式打开（目录会在资源管理器中打开）
+        if (pathMode && !navigatedRef.current && !event.ctrlKey) {
+          pathProbe(pathMode)
+            .then((kind) => {
+              if (!kind) {
+                notice("路径不存在：" + pathMode);
+                return;
+              }
+              void getCurrentWindow().hide();
+              return actionOpen(pathMode).then(() => notice("已打开 " + pathMode));
+            })
+            .catch((e) => notice(String(e)));
+          return;
+        }
         const it = items[selectedIndex];
         if (!it) return;
         if (event.ctrlKey) {
@@ -562,7 +593,7 @@ export default function QuickApp() {
         }
       }
     },
-    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, renameFor, menubarOpen, settingsOpen, notice, recordSearchTerm, togglePreviewPane]
+    [items, selectedIndex, query, hasQuery, historyOpen, previewOpen, menuFor, renameFor, menubarOpen, settingsOpen, notice, recordSearchTerm, togglePreviewPane, pathMode]
   );
 
   const openSettings = (page?: string) => {
@@ -1017,6 +1048,7 @@ export default function QuickApp() {
             item={browseHidden ? null : items[selectedIndex] ?? null}
             total={browseNoScope ? undefined : browseHidden ? allTotal ?? undefined : total}
             elapsed={browseHidden || browseNoScope ? undefined : elapsed}
+            openHint={pathMode && !navigated ? pathMode : undefined}
           />
         </>
       )}

@@ -8,9 +8,11 @@ interface Props {
   total?: number;
   /** 最近一次查询耗时（毫秒）；没有执行查询（空搜索隐藏结果）时不传，只显示索引条数 */
   elapsed?: number;
+  /** 搜索框里直接输入了路径：提示「回车打开该路径」（方向键选过列表项后不再传） */
+  openHint?: string;
 }
 
-export default function FooterBar({ item, total, elapsed }: Props) {
+export default function FooterBar({ item, total, elapsed, openHint }: Props) {
   const [tip, setTip] = useState<string | null>(null);
   // 字段常驻：无选中项（结果为空、加载中）时用「—」占位。
   // 此前整段不渲染，字段会突然消失、右侧计数跟着左右跳动。
@@ -30,9 +32,9 @@ export default function FooterBar({ item, total, elapsed }: Props) {
       {/* 标签必须放在 RTL 省略元素之外：路径过长时从左侧省略，
           若把标签放进同一元素，标签会被带到路径右侧 */}
       <span className="footerbar-path-wrap">
-        <span className="footerbar-path-label">路径：</span>
+        <span className="footerbar-path-label">{openHint ? "回车：" : "路径："}</span>
         <span
-          className={item ? "footerbar-path" : "footerbar-path idle"}
+          className={openHint ? "footerbar-path footerbar-open-hint" : item ? "footerbar-path" : "footerbar-path idle"}
           // 不用原生 title：长路径只显示成一整行，常被屏幕截断；改为自绘可换行的提示
           onMouseEnter={(e) => {
             const el = e.currentTarget;
@@ -43,7 +45,7 @@ export default function FooterBar({ item, total, elapsed }: Props) {
         >
           {/* 外层 rtl 只负责从左侧省略；<bdo dir="ltr"> 固定内部顺序，
               否则 \\server 开头的反斜杠、结尾的括号等中性字符会被 rtl 挪到另一端 */}
-          <bdo dir="ltr">{item?.path ?? "选中文件后显示完整路径"}</bdo>
+          <bdo dir="ltr">{openHint ? `打开 ${openHint}（↑↓ 选择其中的项目）` : item?.path ?? "选中文件后显示完整路径"}</bdo>
         </span>
         {tip && item ? <div className="footerbar-tip">{tip}</div> : null}
       </span>

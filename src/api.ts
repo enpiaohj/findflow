@@ -168,6 +168,8 @@ export const logDirGet = (): Promise<string | null> => invoke("log_dir_get");
 
 export const actionOpen = (path: string): Promise<string> => invoke("action_open", { path });
 export const actionLocate = (path: string): Promise<string> => invoke("action_locate", { path });
+/** 探测键入的路径是否存在：返回 "dir" / "file" / null。 */
+export const pathProbe = (path: string): Promise<"dir" | "file" | null> => invoke("path_probe", { path });
 export const actionCopyPath = (path: string, format: string): Promise<string> =>
   invoke("action_copy_path", { path, format });
 export const actionCopyFiles = (paths: string[]): Promise<string> =>

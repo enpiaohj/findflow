@@ -367,6 +367,7 @@ pub fn run() {
             analysis::organize_execute,
             analysis::similar_images,
             actions::action_open,
+            actions::path_probe,
             actions::action_locate,
             actions::action_copy_path,
             actions::action_copy_files,

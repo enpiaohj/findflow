@@ -133,11 +133,35 @@ pub fn verify_copy(src: &Path, dest: &Path) -> Result<(), String> {
 #[tauri::command]
 pub async fn action_open(app: tauri::AppHandle, path: String) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
+    // 目标已被移动 / 删除，或在搜索框直接输入了不存在的路径时，给出明确提示，
+    // 而不是交给系统弹出「找不到文件」对话框。放到阻塞线程：不可达的网络共享检查可能耗时数秒。
+    let probe = path.clone();
+    let exists = tauri::async_runtime::spawn_blocking(move || Path::new(&probe).exists())
+        .await
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Err("路径不存在，可能已被移动或删除".into());
+    }
     app.opener()
         .open_path(path.clone(), None::<&str>)
         .map_err(|e| format!("打开失败：{e}"))?;
     record_recent(&app, &path, "open");
     Ok("已打开".into())
+}
+
+/// 探测搜索框里键入的路径：存在则返回 `"dir"` / `"file"`，不存在返回 `None`。
+/// 在阻塞线程里检查（不可达的网络共享可能耗时数秒，不能卡住界面线程）。
+#[tauri::command]
+pub async fn path_probe(path: String) -> Result<Option<String>, String> {
+    let p = path.trim().trim_matches('"').to_string();
+    if p.is_empty() {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::metadata(&p).ok().map(|m| if m.is_dir() { "dir" } else { "file" }.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 在资源管理器中定位并选中该文件。

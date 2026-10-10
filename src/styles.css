@@ -2182,3 +2182,9 @@ button:disabled {
   font-size: var(--fs-xs);
   font-weight: 600;
 }
+
+/* 搜索框里输入了路径时的提示：强调色，按正常方向从右侧省略 */
+.footerbar-path.footerbar-open-hint {
+  direction: ltr;
+  color: var(--accent-text);
+}
