@@ -434,75 +434,81 @@ mod tests {
     /// 于是搜「报」得到 0 条——用户看到的就是「搜一个字没反应」。
     #[test]
     fn single_char_query_matches_name_substring() {
-        let dir = tempfile::tempdir().unwrap();
-        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
-        idx.add(idx.build_doc(1, "报告初稿.docx", None, None)).unwrap();
-        idx.add(idx.build_doc(2, "预算表.xlsx", None, None)).unwrap();
-        idx.commit().unwrap();
-        idx.reload();
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+            idx.add(idx.build_doc(1, "报告初稿.docx", None, None)).unwrap();
+            idx.add(idx.build_doc(2, "预算表.xlsx", None, None)).unwrap();
+            idx.commit().unwrap();
+            idx.reload();
 
-        let ids = |q: &str| -> Vec<i64> {
-            let query = idx.build_query(q, None, false);
-            let mut v: Vec<i64> = idx
-                .candidate_docs(query.as_ref(), 10)
-                .unwrap()
-                .iter()
-                .map(|(id, _)| *id as i64)
-                .collect();
-            v.sort();
-            v
-        };
-        // 首字、次字、末字（含扩展名内的字符）都应能命中
-        assert_eq!(ids("报"), vec![1], "首字应命中");
-        assert_eq!(ids("稿"), vec![1], "中间字应命中");
-        assert_eq!(ids("表"), vec![2], "末字应命中");
-        // 无关单字不得命中
-        assert!(ids("龙").is_empty());
+            let ids = |q: &str| -> Vec<i64> {
+                let query = idx.build_query(q, None, false);
+                let mut v: Vec<i64> = idx
+                    .candidate_docs(query.as_ref(), 10)
+                    .unwrap()
+                    .iter()
+                    .map(|(id, _)| *id as i64)
+                    .collect();
+                v.sort();
+                v
+            };
+            // 首字、次字、末字（含扩展名内的字符）都应能命中
+            assert_eq!(ids("报"), vec![1], "首字应命中");
+            assert_eq!(ids("稿"), vec![1], "中间字应命中");
+            assert_eq!(ids("表"), vec![2], "末字应命中");
+            // 无关单字不得命中
+            assert!(ids("龙").is_empty());
+        });
     }
 
     #[test]
     fn delete_then_add_keeps_single_doc_per_fid() {
-        let dir = tempfile::tempdir().unwrap();
-        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
-        idx.add(idx.build_doc(7, "报告初稿.docx", None, None)).unwrap();
-        idx.commit().unwrap();
-        // 与 outbox 消费一致：同一次提交内先删后加
-        idx.delete(7);
-        idx.add(idx.build_doc(7, "报告终稿.docx", None, None)).unwrap();
-        idx.commit().unwrap();
-        idx.reload();
-        let q = idx.build_query("报告", None, false);
-        let hits = idx.candidate_docs(q.as_ref(), 10).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].0, 7);
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+            idx.add(idx.build_doc(7, "报告初稿.docx", None, None)).unwrap();
+            idx.commit().unwrap();
+            // 与 outbox 消费一致：同一次提交内先删后加
+            idx.delete(7);
+            idx.add(idx.build_doc(7, "报告终稿.docx", None, None)).unwrap();
+            idx.commit().unwrap();
+            idx.reload();
+            let q = idx.build_query("报告", None, false);
+            let hits = idx.candidate_docs(q.as_ref(), 10).unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].0, 7);
+        });
     }
 
     /// 写入器因 I/O 错误被丢弃后，下一次写入自动重建，之后的提交正常；
     /// 丢弃前「已写入未提交」的文档确实丢失，并通过标志告知调用方重放。
     #[test]
     fn writer_is_rebuilt_after_being_discarded() {
-        let dir = tempfile::tempdir().unwrap();
-        let idx = SearchIndex::open_or_create(dir.path()).unwrap();
-        idx.add(idx.build_doc(1, "甲方案.docx", None, None)).unwrap();
-        idx.commit().unwrap();
-        idx.add(idx.build_doc(2, "乙方案.docx", None, None)).unwrap(); // 未提交
-        {
-            let mut slot = idx.writer.lock().unwrap();
-            idx.discard_writer(&mut slot);
-        }
-        assert!(idx.take_writer_reset(), "应标记写入器被丢弃");
-        assert!(!idx.take_writer_reset(), "标志读取即清除");
-        idx.add(idx.build_doc(3, "丙方案.docx", None, None)).unwrap(); // 自动重建
-        idx.commit().unwrap();
-        idx.reload();
-        let q = idx.build_query("方案", None, false);
-        let mut ids: Vec<u64> = idx
-            .candidate_docs(q.as_ref(), 10)
-            .unwrap()
-            .iter()
-            .map(|h| h.0)
-            .collect();
-        ids.sort_unstable();
-        assert_eq!(ids, vec![1, 3], "丢弃前未提交的文档 2 丢失，其余正常");
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let idx = SearchIndex::open_or_create(dir.path()).unwrap();
+            idx.add(idx.build_doc(1, "甲方案.docx", None, None)).unwrap();
+            idx.commit().unwrap();
+            idx.add(idx.build_doc(2, "乙方案.docx", None, None)).unwrap(); // 未提交
+            {
+                let mut slot = idx.writer.lock().unwrap();
+                idx.discard_writer(&mut slot);
+            }
+            assert!(idx.take_writer_reset(), "应标记写入器被丢弃");
+            assert!(!idx.take_writer_reset(), "标志读取即清除");
+            idx.add(idx.build_doc(3, "丙方案.docx", None, None)).unwrap(); // 自动重建
+            idx.commit().unwrap();
+            idx.reload();
+            let q = idx.build_query("方案", None, false);
+            let mut ids: Vec<u64> = idx
+                .candidate_docs(q.as_ref(), 10)
+                .unwrap()
+                .iter()
+                .map(|h| h.0)
+                .collect();
+            ids.sort_unstable();
+            assert_eq!(ids, vec![1, 3], "丢弃前未提交的文档 2 丢失，其余正常");
+        });
     }
 }

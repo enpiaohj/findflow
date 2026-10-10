@@ -502,433 +502,453 @@ mod tests {
     /// 空搜索只带类型筛选时是「按条件找文件」：不受默认位置根目录第一层的限制。
     #[test]
     fn filter_without_query_is_not_limited_to_root_layer() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')", [])
-                .unwrap();
-            for (name, kind, parent) in [("top.txt", "doc", "D:/a"), ("pic.jpg", "image", "D:/a/sub")] {
-                c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, ?3, 1, ?4)",
-                    rusqlite::params![name, format!("{parent}\\{name}"), kind, parent],
-                )
-                .unwrap();
-            }
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
+                c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')", [])
+                    .unwrap();
+                for (name, kind, parent) in [("top.txt", "doc", "D:/a"), ("pic.jpg", "image", "D:/a/sub")] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, ?3, 1, ?4)",
+                        rusqlite::params![name, format!("{parent}\\{name}"), kind, parent],
+                    )
+                    .unwrap();
+                }
+            });
+            // 纯浏览：只列根目录第一层
+            let browse = run(&store, &index, &QueryAst::default(), 10, Some(1)).unwrap();
+            assert_eq!(browse.items.len(), 1);
+            // 带类型筛选：子目录里的图片也应命中
+            let images = QueryAst {
+                kinds: vec!["image".into()],
+                ..Default::default()
+            };
+            let r = run(&store, &index, &images, 10, Some(1)).unwrap();
+            assert_eq!(r.items.len(), 1);
+            assert_eq!(r.items[0].name, "pic.jpg");
         });
-        // 纯浏览：只列根目录第一层
-        let browse = run(&store, &index, &QueryAst::default(), 10, Some(1)).unwrap();
-        assert_eq!(browse.items.len(), 1);
-        // 带类型筛选：子目录里的图片也应命中
-        let images = QueryAst {
-            kinds: vec!["image".into()],
-            ..Default::default()
-        };
-        let r = run(&store, &index, &images, 10, Some(1)).unwrap();
-        assert_eq!(r.items.len(), 1);
-        assert_eq!(r.items[0].name, "pic.jpg");
     }
 
     /// `path:D:\Temp` 按目录边界匹配：含该目录本身与其下内容，不误中 `D:\Temp2`；大小写不敏感。
     #[test]
     fn absolute_path_filter_matches_directory_boundary() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\\', 'now')", [])
-                .unwrap();
-            for (name, parent) in [
-                ("a.txt", "D:\\Temp"),
-                ("b.txt", "D:\\Temp\\sub"),
-                ("c.txt", "D:\\Temp2"),
-                ("d.txt", "E:\\Temp"),
-            ] {
-                c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, 'doc', 1, ?3)",
-                    rusqlite::params![name, format!("{parent}\\{name}"), parent],
-                )
-                .unwrap();
-            }
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
+                c.execute("INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:\\', 'now')", [])
+                    .unwrap();
+                for (name, parent) in [
+                    ("a.txt", "D:\\Temp"),
+                    ("b.txt", "D:\\Temp\\sub"),
+                    ("c.txt", "D:\\Temp2"),
+                    ("d.txt", "E:\\Temp"),
+                ] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, 'doc', 1, ?3)",
+                        rusqlite::params![name, format!("{parent}\\{name}"), parent],
+                    )
+                    .unwrap();
+                }
+            });
+            let names = |q: &str| {
+                let ast = crate::query::parse(q);
+                let mut v: Vec<String> = run(&store, &index, &ast, 10, None)
+                    .unwrap()
+                    .items
+                    .into_iter()
+                    .map(|i| i.name)
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(names(r"path:D:\Temp"), vec!["a.txt", "b.txt"]);
+            assert_eq!(names(r"path:d:/temp/"), vec!["a.txt", "b.txt"]);
+            assert_eq!(names(r"-path:D:\Temp"), vec!["c.txt", "d.txt"]);
+            // 相对写法仍是「路径包含」：Temp2 与 E:\Temp 也会命中
+            assert_eq!(names("path:Temp").len(), 4);
         });
-        let names = |q: &str| {
-            let ast = crate::query::parse(q);
-            let mut v: Vec<String> = run(&store, &index, &ast, 10, None)
-                .unwrap()
-                .items
-                .into_iter()
-                .map(|i| i.name)
-                .collect();
-            v.sort();
-            v
-        };
-        assert_eq!(names(r"path:D:\Temp"), vec!["a.txt", "b.txt"]);
-        assert_eq!(names(r"path:d:/temp/"), vec!["a.txt", "b.txt"]);
-        assert_eq!(names(r"-path:D:\Temp"), vec!["c.txt", "d.txt"]);
-        // 相对写法仍是「路径包含」：Temp2 与 E:\Temp 也会命中
-        assert_eq!(names("path:Temp").len(), 4);
     }
 
     /// 已关闭的索引范围不参与搜索与计数；重新启用后恢复。
     #[test]
     fn disabled_scope_is_excluded_from_results_and_total() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
-                [],
-            )
-            .unwrap();
-            for (sid, name, parent) in [(1, "alpha.txt", "D:/a"), (2, "beta.txt", "D:/b")] {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (?1, ?2, ?3, 'doc', 1, ?4)",
-                    rusqlite::params![sid, name, format!("{parent}\\{name}"), parent],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
+                    [],
                 )
                 .unwrap();
-            }
+                for (sid, name, parent) in [(1, "alpha.txt", "D:/a"), (2, "beta.txt", "D:/b")] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (?1, ?2, ?3, 'doc', 1, ?4)",
+                        rusqlite::params![sid, name, format!("{parent}\\{name}"), parent],
+                    )
+                    .unwrap();
+                }
+            });
+            let ast = QueryAst::default();
+            let names = |o: &SearchOutcome| {
+                let mut v: Vec<String> = o.items.iter().map(|i| i.name.clone()).collect();
+                v.sort();
+                v
+            };
+            invalidate_total_cache();
+            let all = run(&store, &index, &ast, 10, None).unwrap();
+            assert_eq!(names(&all), vec!["alpha.txt", "beta.txt"]);
+            assert_eq!(all.total, 2);
+
+            store.with_conn(|c| c.execute("UPDATE scopes SET enabled=0 WHERE scope_id=2", []).unwrap());
+            invalidate_total_cache();
+            let off = run(&store, &index, &ast, 10, None).unwrap();
+            assert_eq!(names(&off), vec!["alpha.txt"]);
+            assert_eq!(off.total, 1);
+
+            store.with_conn(|c| c.execute("UPDATE scopes SET enabled=1 WHERE scope_id=2", []).unwrap());
+            invalidate_total_cache();
+            let on = run(&store, &index, &ast, 10, None).unwrap();
+            assert_eq!(names(&on), vec!["alpha.txt", "beta.txt"]);
         });
-        let ast = QueryAst::default();
-        let names = |o: &SearchOutcome| {
-            let mut v: Vec<String> = o.items.iter().map(|i| i.name.clone()).collect();
-            v.sort();
-            v
-        };
-        invalidate_total_cache();
-        let all = run(&store, &index, &ast, 10, None).unwrap();
-        assert_eq!(names(&all), vec!["alpha.txt", "beta.txt"]);
-        assert_eq!(all.total, 2);
-
-        store.with_conn(|c| c.execute("UPDATE scopes SET enabled=0 WHERE scope_id=2", []).unwrap());
-        invalidate_total_cache();
-        let off = run(&store, &index, &ast, 10, None).unwrap();
-        assert_eq!(names(&off), vec!["alpha.txt"]);
-        assert_eq!(off.total, 1);
-
-        store.with_conn(|c| c.execute("UPDATE scopes SET enabled=1 WHERE scope_id=2", []).unwrap());
-        invalidate_total_cache();
-        let on = run(&store, &index, &ast, 10, None).unwrap();
-        assert_eq!(names(&on), vec!["alpha.txt", "beta.txt"]);
     }
 
     /// 空搜索浏览：scope_id 限定范围且仅列根目录第一层，名称与大小排序保持稳定。
     #[test]
     fn scope_filter_and_browse_sorts() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
-                [],
-            )
-            .unwrap();
-            for (sid, name, size, parent) in [
-                (1, "zeta.txt", 30_i64, "D:/a"),
-                (1, "alpha.txt", 10_i64, "D:/a"),
-                (2, "beta.txt", 20_i64, "D:/b"),
-                // 子目录内的文件：属于该范围，但不属于根目录第一层
-                (1, "deep.txt", 40_i64, "D:/a/sub"),
-            ] {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (?1, ?2, ?3, 'doc', ?4, ?5)",
-                    rusqlite::params![sid, name, format!("{parent}\\{name}"), size, parent],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now'), (2, 'D:/b', 'now')",
+                    [],
                 )
                 .unwrap();
-            }
+                for (sid, name, size, parent) in [
+                    (1, "zeta.txt", 30_i64, "D:/a"),
+                    (1, "alpha.txt", 10_i64, "D:/a"),
+                    (2, "beta.txt", 20_i64, "D:/b"),
+                    // 子目录内的文件：属于该范围，但不属于根目录第一层
+                    (1, "deep.txt", 40_i64, "D:/a/sub"),
+                ] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (?1, ?2, ?3, 'doc', ?4, ?5)",
+                        rusqlite::params![sid, name, format!("{parent}\\{name}"), size, parent],
+                    )
+                    .unwrap();
+                }
+            });
+
+            let by_size = QueryAst {
+                sort: SortMode::Size,
+                ..Default::default()
+            };
+            let all = run(&store, &index, &by_size, 10, None).unwrap();
+            assert_eq!(
+                all.items
+                    .iter()
+                    .map(|item| item.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["deep.txt", "zeta.txt", "beta.txt", "alpha.txt"]
+            );
+            assert_eq!(all.total, 4);
+
+            let by_name = QueryAst {
+                sort: SortMode::Name,
+                ..Default::default()
+            };
+            // 指定位置：只返回该位置根目录第一层的条目，子目录内的 deep.txt 不出现
+            let scoped = run(&store, &index, &by_name, 10, Some(1)).unwrap();
+            assert_eq!(
+                scoped
+                    .items
+                    .iter()
+                    .map(|item| item.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["alpha.txt", "zeta.txt"]
+            );
+            assert_eq!(scoped.total, 2);
+
+            // 不存在的位置：结果为空
+            let unknown_scope = run(&store, &index, &by_name, 10, Some(99)).unwrap();
+            assert!(unknown_scope.items.is_empty());
+            assert_eq!(unknown_scope.total, 0);
         });
-
-        let by_size = QueryAst {
-            sort: SortMode::Size,
-            ..Default::default()
-        };
-        let all = run(&store, &index, &by_size, 10, None).unwrap();
-        assert_eq!(
-            all.items
-                .iter()
-                .map(|item| item.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["deep.txt", "zeta.txt", "beta.txt", "alpha.txt"]
-        );
-        assert_eq!(all.total, 4);
-
-        let by_name = QueryAst {
-            sort: SortMode::Name,
-            ..Default::default()
-        };
-        // 指定位置：只返回该位置根目录第一层的条目，子目录内的 deep.txt 不出现
-        let scoped = run(&store, &index, &by_name, 10, Some(1)).unwrap();
-        assert_eq!(
-            scoped
-                .items
-                .iter()
-                .map(|item| item.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha.txt", "zeta.txt"]
-        );
-        assert_eq!(scoped.total, 2);
-
-        // 不存在的位置：结果为空
-        let unknown_scope = run(&store, &index, &by_name, 10, Some(99)).unwrap();
-        assert!(unknown_scope.items.is_empty());
-        assert_eq!(unknown_scope.total, 0);
     }
 
     /// 「共 N 项」必须是真实命中数：结果被 200 条上限截断时，
     /// 界面要能告诉用户实际命中了多少条，而不是只报列出的条数。
     #[test]
     fn matched_counts_all_hits_not_just_returned_page() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-        });
-        for i in 0..5 {
-            let name = format!("会议纪要{i}.txt");
-            let path = format!("D:/a/{name}");
-            let fid = store.with_conn(|c| {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
-                    rusqlite::params![name, path],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
                 )
                 .unwrap();
-                c.last_insert_rowid() as u64
             });
-            index.add(index.build_doc(fid, &name, None, None)).unwrap();
-        }
-        index.commit().unwrap();
-        index.reload();
+            for i in 0..5 {
+                let name = format!("会议纪要{i}.txt");
+                let path = format!("D:/a/{name}");
+                let fid = store.with_conn(|c| {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                        rusqlite::params![name, path],
+                    )
+                    .unwrap();
+                    c.last_insert_rowid() as u64
+                });
+                index.add(index.build_doc(fid, &name, None, None)).unwrap();
+            }
+            index.commit().unwrap();
+            index.reload();
 
-        let ast = QueryAst {
-            text: Some("会议".into()),
-            ..Default::default()
-        };
-        let out = run(&store, &index, &ast, 2, None).unwrap();
-        assert_eq!(out.items.len(), 2, "只返回上限条数");
-        assert_eq!(out.matched, 5, "命中数应为全部 5 条，而不是返回的 2 条");
+            let ast = QueryAst {
+                text: Some("会议".into()),
+                ..Default::default()
+            };
+            let out = run(&store, &index, &ast, 2, None).unwrap();
+            assert_eq!(out.items.len(), 2, "只返回上限条数");
+            assert_eq!(out.matched, 5, "命中数应为全部 5 条，而不是返回的 2 条");
 
-        // 空搜索浏览没有条件，命中数即索引总数
-        let browse = QueryAst::default();
-        let out2 = run(&store, &index, &browse, 2, None).unwrap();
-        assert_eq!(out2.matched, 5);
-        assert_eq!(out2.total, 5);
+            // 空搜索浏览没有条件，命中数即索引总数
+            let browse = QueryAst::default();
+            let out2 = run(&store, &index, &browse, 2, None).unwrap();
+            assert_eq!(out2.matched, 5);
+            assert_eq!(out2.total, 5);
+        });
     }
 
     /// 多个关键词是「且」：只含其中一个词的文件不得出现在结果里。
     #[test]
     fn multiple_keywords_must_all_match() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-        });
-        for name in ["年度报告2026.pdf", "年度报告2025.pdf", "旅行计划2026.docx"] {
-            let fid = store.with_conn(|c| {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
-                    rusqlite::params![name, format!("D:/a\\{name}")],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
                 )
                 .unwrap();
-                c.last_insert_rowid() as u64
             });
-            index.add(index.build_doc(fid, name, None, None)).unwrap();
-        }
-        index.commit().unwrap();
-        index.reload();
+            for name in ["年度报告2026.pdf", "年度报告2025.pdf", "旅行计划2026.docx"] {
+                let fid = store.with_conn(|c| {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                        rusqlite::params![name, format!("D:/a\\{name}")],
+                    )
+                    .unwrap();
+                    c.last_insert_rowid() as u64
+                });
+                index.add(index.build_doc(fid, name, None, None)).unwrap();
+            }
+            index.commit().unwrap();
+            index.reload();
 
-        let ast = QueryAst {
-            text: Some("报告 2026".into()),
-            ..Default::default()
-        };
-        let out = run(&store, &index, &ast, 20, None).unwrap();
-        let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, vec!["年度报告2026.pdf"], "两个词都要命中");
+            let ast = QueryAst {
+                text: Some("报告 2026".into()),
+                ..Default::default()
+            };
+            let out = run(&store, &index, &ast, 20, None).unwrap();
+            let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
+            assert_eq!(names, vec!["年度报告2026.pdf"], "两个词都要命中");
+        });
     }
 
     /// 正文检索：查询词要按 jieba 切成词项再匹配，整串当作单个词项会让长词永远命不中。
     #[test]
     fn content_query_is_segmented_like_indexed_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-        });
-        let fid = store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                 VALUES (1, 'notes.txt', 'D:/a\\notes.txt', 'doc', 1, 'D:/a')",
-                [],
-            )
-            .unwrap();
-            c.last_insert_rowid() as u64
-        });
-        index
-            .add(index.build_doc(fid, "notes.txt", Some("本季度的项目管理报告详见附录"), None))
-            .unwrap();
-        index.commit().unwrap();
-        index.reload();
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
+                )
+                .unwrap();
+            });
+            let fid = store.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                     VALUES (1, 'notes.txt', 'D:/a\\notes.txt', 'doc', 1, 'D:/a')",
+                    [],
+                )
+                .unwrap();
+                c.last_insert_rowid() as u64
+            });
+            index
+                .add(index.build_doc(fid, "notes.txt", Some("本季度的项目管理报告详见附录"), None))
+                .unwrap();
+            index.commit().unwrap();
+            index.reload();
 
-        let ast = QueryAst {
-            text: Some("项目管理报告".into()),
-            ..Default::default()
-        };
-        let out = run(&store, &index, &ast, 20, None).unwrap();
-        assert_eq!(out.items.len(), 1, "文件名不含该词，应由正文命中");
+            let ast = QueryAst {
+                text: Some("项目管理报告".into()),
+                ..Default::default()
+            };
+            let out = run(&store, &index, &ast, 20, None).unwrap();
+            assert_eq!(out.items.len(), 1, "文件名不含该词，应由正文命中");
+        });
     }
 
     /// 排除词里的 `_` `%` 是字面量，不是 LIKE 通配。
     #[test]
     fn exclude_text_treats_like_metachars_literally() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-            for name in ["a_draft.txt", "abdraft.txt"] {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
-                    rusqlite::params![name, format!("D:/a\\{name}")],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
                 )
                 .unwrap();
-            }
+                for name in ["a_draft.txt", "abdraft.txt"] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, 'doc', 1, 'D:/a')",
+                        rusqlite::params![name, format!("D:/a\\{name}")],
+                    )
+                    .unwrap();
+                }
+            });
+            let ast = QueryAst {
+                text_exclude: vec!["_draft".into()],
+                ..Default::default()
+            };
+            let out = run(&store, &index, &ast, 20, None).unwrap();
+            let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
+            assert_eq!(names, vec!["abdraft.txt"], "只排除字面含 _draft 的文件");
         });
-        let ast = QueryAst {
-            text_exclude: vec!["_draft".into()],
-            ..Default::default()
-        };
-        let out = run(&store, &index, &ast, 20, None).unwrap();
-        let names: Vec<&str> = out.items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, vec!["abdraft.txt"], "只排除字面含 _draft 的文件");
     }
 
     /// 通配模式按整名匹配：`*` 任意多字符、`?` 单字符，且元字符被转义。
     #[test]
     fn wildcard_filters_by_full_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-            for name in [
-                "报告-2026.pdf",
-                "报告-2027.pdf",
-                "预算.xlsx",
-                "100%_增长.txt",
-                "note-01.txt",
-                "note-02.txt",
-                "note-1.txt",
-            ] {
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
                 c.execute(
-                    "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
-                     VALUES (1, ?1, ?2, ?3, 'doc', 1, 'D:/a')",
-                    // 扫描器写入的 ext 是小写、无点的扩展名；`*.pdf` 走 ext 索引依赖它
-                    rusqlite::params![
-                        name,
-                        format!("D:/a\\{name}"),
-                        name.rsplit('.').next().unwrap_or("")
-                    ],
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
                 )
                 .unwrap();
-            }
+                for name in [
+                    "报告-2026.pdf",
+                    "报告-2027.pdf",
+                    "预算.xlsx",
+                    "100%_增长.txt",
+                    "note-01.txt",
+                    "note-02.txt",
+                    "note-1.txt",
+                ] {
+                    c.execute(
+                        "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
+                         VALUES (1, ?1, ?2, ?3, 'doc', 1, 'D:/a')",
+                        // 扫描器写入的 ext 是小写、无点的扩展名；`*.pdf` 走 ext 索引依赖它
+                        rusqlite::params![
+                            name,
+                            format!("D:/a\\{name}"),
+                            name.rsplit('.').next().unwrap_or("")
+                        ],
+                    )
+                    .unwrap();
+                }
+            });
+
+            let names =|ast: &QueryAst| -> Vec<String> {
+                let mut v: Vec<String> = run(&store, &index, ast, 20, None)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .map(|i| i.name.clone())
+                    .collect();
+                v.sort();
+                v
+            };
+            let wc = |patterns: &[&str]| QueryAst {
+                name_include: patterns.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            };
+
+            // 前缀 + 任意扩展名
+            assert_eq!(names(&wc(&["报告*"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
+            // 任意名 + 指定扩展名
+            assert_eq!(names(&wc(&["*.pdf"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
+            // ? 只匹配单个字符：note-0?.txt 不含 note-1.txt
+            assert_eq!(names(&wc(&["note-0?.txt"])), vec!["note-01.txt", "note-02.txt"]);
+            // 用户输入的 % 是字面量，不是通配
+            assert_eq!(names(&wc(&["100%_增长.txt"])), vec!["100%_增长.txt"]);
+            assert!(names(&wc(&["100%增长*"])).is_empty(), "% 不应匹配任意字符");
+
+            // 排除模式
+            let excluded = QueryAst {
+                name_include: vec!["*.pdf".into()],
+                name_exclude: vec!["*2027*".into()],
+                ..Default::default()
+            };
+            assert_eq!(names(&excluded), vec!["报告-2026.pdf"]);
+
+            // 纯通配查询默认按名称排序，而非落到「按大小」
+            let plain = run(&store, &index, &wc(&["note-*"]), 20, None).unwrap();
+            assert_eq!(
+                plain.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+                vec!["note-01.txt", "note-02.txt", "note-1.txt"]
+            );
         });
-
-        let names =|ast: &QueryAst| -> Vec<String> {
-            let mut v: Vec<String> = run(&store, &index, ast, 20, None)
-                .unwrap()
-                .items
-                .iter()
-                .map(|i| i.name.clone())
-                .collect();
-            v.sort();
-            v
-        };
-        let wc = |patterns: &[&str]| QueryAst {
-            name_include: patterns.iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
-        };
-
-        // 前缀 + 任意扩展名
-        assert_eq!(names(&wc(&["报告*"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
-        // 任意名 + 指定扩展名
-        assert_eq!(names(&wc(&["*.pdf"])), vec!["报告-2026.pdf", "报告-2027.pdf"]);
-        // ? 只匹配单个字符：note-0?.txt 不含 note-1.txt
-        assert_eq!(names(&wc(&["note-0?.txt"])), vec!["note-01.txt", "note-02.txt"]);
-        // 用户输入的 % 是字面量，不是通配
-        assert_eq!(names(&wc(&["100%_增长.txt"])), vec!["100%_增长.txt"]);
-        assert!(names(&wc(&["100%增长*"])).is_empty(), "% 不应匹配任意字符");
-
-        // 排除模式
-        let excluded = QueryAst {
-            name_include: vec!["*.pdf".into()],
-            name_exclude: vec!["*2027*".into()],
-            ..Default::default()
-        };
-        assert_eq!(names(&excluded), vec!["报告-2026.pdf"]);
-
-        // 纯通配查询默认按名称排序，而非落到「按大小」
-        let plain = run(&store, &index, &wc(&["note-*"]), 20, None).unwrap();
-        assert_eq!(
-            plain.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            vec!["note-01.txt", "note-02.txt", "note-1.txt"]
-        );
     }
 
     /// 通配查询不应被当作空搜索浏览（不受 scope_id 的第一层限制）。
     #[test]
     fn wildcard_is_not_treated_as_empty_browse() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
-        let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
-        store.with_conn(|c| {
-            c.execute(
-                "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
-                [],
-            )
-            .unwrap();
-            c.execute(
-                "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
-                 VALUES (1, 'deep.pdf', 'D:/a/sub\\deep.pdf', 'pdf', 'doc', 1, 'D:/a/sub')",
-                [],
-            )
-            .unwrap();
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::settings::SettingsStore::new(crate::db::open_in_memory().unwrap());
+            let index = crate::searchindex::SearchIndex::open_or_create(dir.path()).unwrap();
+            store.with_conn(|c| {
+                c.execute(
+                    "INSERT INTO scopes(scope_id, path, added_at) VALUES (1, 'D:/a', 'now')",
+                    [],
+                )
+                .unwrap();
+                c.execute(
+                    "INSERT INTO files(scope_id, name, path, ext, kind, size, parent_path)
+                     VALUES (1, 'deep.pdf', 'D:/a/sub\\deep.pdf', 'pdf', 'doc', 1, 'D:/a/sub')",
+                    [],
+                )
+                .unwrap();
+            });
+            let ast = QueryAst {
+                name_include: vec!["*.pdf".into()],
+                ..Default::default()
+            };
+            // 即便传了 scope_id，通配查询也应覆盖子目录
+            let out = run(&store, &index, &ast, 10, Some(1)).unwrap();
+            assert_eq!(out.items.len(), 1, "子目录内的通配命中不应被第一层限制滤掉");
         });
-        let ast = QueryAst {
-            name_include: vec!["*.pdf".into()],
-            ..Default::default()
-        };
-        // 即便传了 scope_id，通配查询也应覆盖子目录
-        let out = run(&store, &index, &ast, 10, Some(1)).unwrap();
-        assert_eq!(out.items.len(), 1, "子目录内的通配命中不应被第一层限制滤掉");
     }
 }

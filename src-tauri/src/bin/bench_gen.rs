@@ -134,6 +134,9 @@ fn main() {
     let index = findflow_lib::searchindex::SearchIndex::open_or_create(&index_dir).unwrap();
     let idx_started = Instant::now();
     let mut indexed = 0usize;
+    // 自上次成功提交以来写入的行：写入器因 I/O 错误（杀毒软件瞬时占用文件等）失效时用来重放，
+    // 与应用内 outbox 的恢复策略一致——此前遇到一次错误就直接退出，基准数据无法生成完整
+    let mut pending: Vec<(i64, String)> = Vec::new();
     loop {
         let batch_rows: Vec<(i64, String)> = store.with_conn(|c| {
             let mut stmt = c
@@ -147,28 +150,58 @@ fn main() {
         if batch_rows.is_empty() {
             break;
         }
-        for (fid, name) in &batch_rows {
-            let doc = index.build_doc(*fid as u64, name, None, None);
-            if let Err(e) = index.add(doc) {
-                eprintln!("索引写入失败 fid={fid} name={name}: {e}");
-                match index.commit() {
-                    Err(ce) => eprintln!("commit 错误（根因）: {ce}"),
-                    Ok(_) => eprintln!("commit 正常"),
-                }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                return;
-            }
-        }
+        let mut ok = add_rows(&index, &batch_rows, false);
+        pending.extend(batch_rows.iter().cloned());
         indexed += batch_rows.len();
+        if pending.len() >= BENCH_COMMIT_EVERY {
+            ok = ok && index.commit().is_ok();
+            commit_or_replay(&index, &pending, ok);
+            pending.clear();
+        }
         if indexed % 100_000 == 0 {
             println!("已索引 {indexed} 条");
         }
     }
-    index.commit().unwrap();
+    commit_or_replay(&index, &pending, index.commit().is_ok());
     let idx_elapsed = idx_started.elapsed().as_secs_f64();
     println!(
         "Tantivy 完成：{indexed} 条，耗时 {idx_elapsed:.1}s"
     );
+}
+
+/// 每写入这么多条提交一次（足够大以避免产生过多小段，又不至于出错时重放太多）。
+const BENCH_COMMIT_EVERY: usize = 50_000;
+
+/// 写入一批文档。`replace` 为真时先删后加（重放用，避免重复文档）。全部成功返回 true。
+fn add_rows(index: &findflow_lib::searchindex::SearchIndex, rows: &[(i64, String)], replace: bool) -> bool {
+    let mut ok = true;
+    for (fid, name) in rows {
+        if replace {
+            index.delete(*fid as u64);
+        }
+        if let Err(e) = index.add(index.build_doc(*fid as u64, name, None, None)) {
+            eprintln!("索引写入失败 fid={fid}: {e}");
+            ok = false;
+        }
+    }
+    ok
+}
+
+/// 本轮写入与提交都成功则无事；否则（写入器已被库丢弃并会自动重建）重放自上次提交以来的全部行，
+/// 带退避重试，最多 10 次。
+fn commit_or_replay(index: &findflow_lib::searchindex::SearchIndex, pending: &[(i64, String)], ok: bool) {
+    if ok && !index.take_writer_reset() {
+        return;
+    }
+    for attempt in 1..=10u64 {
+        eprintln!("写入器失效，第 {attempt} 次重放 {} 条后重新提交…", pending.len());
+        std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
+        index.take_writer_reset();
+        if add_rows(index, pending, true) && index.commit().is_ok() && !index.take_writer_reset() {
+            return;
+        }
+    }
+    panic!("重放 10 次仍无法提交索引，请检查杀毒软件是否占用 .bench 目录");
 }
 
 fn run_query_bench(

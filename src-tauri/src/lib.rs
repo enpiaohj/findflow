@@ -1,4 +1,6 @@
 pub mod actions;
+#[cfg(test)]
+mod testutil;
 pub mod analysis;
 pub mod batchops;
 pub mod db;

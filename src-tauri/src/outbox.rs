@@ -310,56 +310,62 @@ mod tests {
     /// 文档还没落盘而事件已删除，索引与数据库静默不一致。
     #[test]
     fn writer_reset_replays_applied_events_instead_of_deleting_them() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = test_state(dir.path());
-        seed_events(&state.bg_db, 3);
-        mark_applied(&state.bg_db, 1, 3);
-        // 模拟写入器失效被丢弃：旧写入器里这 3 篇文档已丢失
-        {
-            let mut slot = state.index.writer.lock().unwrap();
-            state.index.discard_writer(&mut slot);
-        }
-        // 新写入器上的提交会「成功」，但绝不能据此删除事件：先重置回 pending 重放
-        assert!(!commit_and_reload(&state, &state.bg_db));
-        assert_eq!(count(&state.bg_db, None), 3, "事件不得被删除");
-        assert_eq!(count(&state.bg_db, Some("pending")), 3);
-        // 重放（重新写入并标记）后正常提交、清理
-        mark_applied(&state.bg_db, 1, 3);
-        assert!(commit_and_reload(&state, &state.bg_db));
-        assert_eq!(count(&state.bg_db, None), 0);
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let state = test_state(dir.path());
+            seed_events(&state.bg_db, 3);
+            mark_applied(&state.bg_db, 1, 3);
+            // 模拟写入器失效被丢弃：旧写入器里这 3 篇文档已丢失
+            {
+                let mut slot = state.index.writer.lock().unwrap();
+                state.index.discard_writer(&mut slot);
+            }
+            // 新写入器上的提交会「成功」，但绝不能据此删除事件：先重置回 pending 重放
+            assert!(!commit_and_reload(&state, &state.bg_db));
+            assert_eq!(count(&state.bg_db, None), 3, "事件不得被删除");
+            assert_eq!(count(&state.bg_db, Some("pending")), 3);
+            // 重放（重新写入并标记）后正常提交、清理
+            mark_applied(&state.bg_db, 1, 3);
+            assert!(commit_and_reload(&state, &state.bg_db));
+            assert_eq!(count(&state.bg_db, None), 0);
+        });
     }
 
     #[test]
     fn events_survive_until_commit_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = test_state(dir.path());
-        seed_events(&state.bg_db, 3);
-        assert_eq!(count(&state.bg_db, Some("pending")), 3);
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let state = test_state(dir.path());
+            seed_events(&state.bg_db, 3);
+            assert_eq!(count(&state.bg_db, Some("pending")), 3);
 
-        // 写入 writer 后只标记状态，不删除
-        mark_applied(&state.bg_db, 1, 3);
-        assert_eq!(count(&state.bg_db, None), 3, "事件不得被删除");
-        assert_eq!(count(&state.bg_db, Some("applied")), 3);
-        assert_eq!(count(&state.bg_db, Some("pending")), 0);
+            // 写入 writer 后只标记状态，不删除
+            mark_applied(&state.bg_db, 1, 3);
+            assert_eq!(count(&state.bg_db, None), 3, "事件不得被删除");
+            assert_eq!(count(&state.bg_db, Some("applied")), 3);
+            assert_eq!(count(&state.bg_db, Some("pending")), 0);
 
-        // 提交成功后才清理
-        assert!(commit_and_reload(&state, &state.bg_db));
-        assert_eq!(count(&state.bg_db, None), 0, "提交成功后事件被清理");
+            // 提交成功后才清理
+            assert!(commit_and_reload(&state, &state.bg_db));
+            assert_eq!(count(&state.bg_db, None), 0, "提交成功后事件被清理");
+        });
     }
 
     /// 崩溃恢复：进程在「已写入但未提交」时退出，下次启动必须重放这些事件，
     /// 否则那批文档永远不在索引里。
     #[test]
     fn recovery_replays_events_that_never_committed() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = test_state(dir.path());
-        seed_events(&state.bg_db, 3);
+        crate::testutil::retry_on_index_io(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let state = test_state(dir.path());
+            seed_events(&state.bg_db, 3);
 
-        mark_applied(&state.bg_db, 1, 3);
-        assert_eq!(count(&state.bg_db, Some("applied")), 3);
-        // 模拟进程退出（未提交），下次启动执行恢复
-        recover_applied(&state.bg_db);
-        assert_eq!(count(&state.bg_db, Some("pending")), 3);
-        assert_eq!(count(&state.bg_db, None), 3, "恢复后事件仍完整，可重新写入");
+            mark_applied(&state.bg_db, 1, 3);
+            assert_eq!(count(&state.bg_db, Some("applied")), 3);
+            // 模拟进程退出（未提交），下次启动执行恢复
+            recover_applied(&state.bg_db);
+            assert_eq!(count(&state.bg_db, Some("pending")), 3);
+            assert_eq!(count(&state.bg_db, None), 3, "恢复后事件仍完整，可重新写入");
+        });
     }
 }
