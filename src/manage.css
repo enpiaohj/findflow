@@ -767,3 +767,21 @@
 .legacy-notice button {
   margin-top: 4px;
 }
+
+/* ---------- 软件更新（关于页） ---------- */
+
+.update-notes {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.update-progress {
+  margin-top: 10px;
+}

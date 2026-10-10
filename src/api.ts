@@ -265,7 +265,12 @@ export const traySetVisible = (visible: boolean): Promise<void> =>
 /** 完全退出应用：关闭窗口只隐藏到后台。 */
 export const appExit = (): Promise<void> => invoke("app_exit");
 
-export const updaterCheck = (): Promise<{ available: boolean; version: string | null }> =>
+export const updaterCheck = (): Promise<{
+  available: boolean;
+  version: string | null;
+  notes: string | null;
+  currentVersion: string;
+}> =>
   invoke("updater_check");
 export const updaterInstall = (): Promise<void> => invoke("updater_install");
 

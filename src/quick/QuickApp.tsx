@@ -894,6 +894,7 @@ export default function QuickApp() {
       accel: "h",
       entries: [
         { kind: "item", label: "快捷键…", onSelect: () => openSettings("hotkey") },
+        { kind: "item", label: "检查更新…", onSelect: () => openSettings("about") },
         { kind: "item", label: "关于 FindFlow", onSelect: () => openSettings("about") },
       ],
     },

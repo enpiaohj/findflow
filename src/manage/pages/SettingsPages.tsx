@@ -10,6 +10,7 @@ import {
   hotkeyApply,
 } from "../../api";
 import { getThemePref, setThemePref, type ThemePref } from "../../theme";
+import UpdateCard from "./UpdateCard";
 
 /** 外观：主题与显示密度。 */
 export function AppearanceSettingsPage({ notice: _notice }: PageCtx) {
@@ -215,7 +216,7 @@ export function PrivacyPage({ notice }: PageCtx) {
   );
 }
 
-export function AboutPage({ notice: _notice }: PageCtx) {
+export function AboutPage({ notice }: PageCtx) {
   const [version, setVersion] = useState("");
 
   useEffect(() => {
@@ -251,6 +252,7 @@ export function AboutPage({ notice: _notice }: PageCtx) {
           </a>
         </div>
       </section>
+      <UpdateCard version={version} notice={notice} />
       <section className="card">
         <div className="card-head">
           <h3>隐私与数据</h3>
@@ -260,8 +262,10 @@ export function AboutPage({ notice: _notice }: PageCtx) {
           可在「隐私与安全」中关闭或清空搜索历史。
         </p>
         <p className="muted">
-          唯一的外部请求来自可选的「自然语言搜索」：仅在配置 DeepSeek API Key 并主动使用该功能时，
-          把查询文本与字段定义发送给 DeepSeek，仅返回查询条件，不发送任何本地文件数据。
+          只有两种情况会联网，且都需要你主动发起：一是可选的「自然语言搜索」，仅在配置 DeepSeek API Key 并主动使用时，
+          把查询文本与字段定义发送给 DeepSeek，仅返回查询条件，不发送任何本地文件数据；
+          二是点击上方的「检查更新」，此时访问 GitHub 读取更新清单并在你确认后下载安装包，不发送任何本机数据。
+          FindFlow 不会在后台自动检查更新。
         </p>
       </section>
     </div>

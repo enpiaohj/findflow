@@ -36,6 +36,7 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust（核心）；SQLite�
 | 生成全套应用图标（源文件 `src-tauri/icons/source/*.svg`，需本机 Chrome 或 Edge） | `node scripts/generate-app-icon.mjs` |
 | 性能基准（生成 100 万条，去重后约 85 万） | `cd src-tauri && cargo run --release --bin bench_gen -- --count 1000000` |
 | 性能基准（查询 P50/P95/P99，与界面同一路径） | `cd src-tauri && cargo run --release --bin bench_gen -- --query "关键词" --rounds 200` |
+| 生成更新清单 latest.json（发布时用） | `node scripts/make-latest-json.mjs --version X.Y.Z --notes "更新说明"` |
 | 改写 MSI 卸载列表显示名（发布时用） | `powershell -NoProfile -File scripts\msi-set-display-name.ps1 -Path <msi> -Name "FindFlow vX.Y.Z"` |
 
 ## 架构要点（改动前先了解）
@@ -61,18 +62,18 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust（核心）；SQLite�
 
 1. 工作区干净；跑完整验证：`npm run build`、`npm run test:unit`、`cargo test`、`cargo clippy --all-targets`。
 2. 版本号四处同步：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`（`Cargo.lock` 由构建更新）、本文件的「版本」行；根目录 `CHANGELOG.md` 新增条目，`README.md` 的版本行与基准数字按需更新。
-3. `npm run tauri build`。本环境自动签名会报找不到私钥（构建产物已生成，不影响），改为手动签名：`npx tauri signer sign -f <私钥> -p <密码> <setup.exe>`。
+3. `npm run tauri build`。本环境自动签名会报找不到私钥（构建产物已生成，不影响），改为手动签名：`npx tauri signer sign -f <私钥> -p <密码> <文件>`，**setup.exe 与 MSI 都要签**（MSI 要在第 5 步改完显示名之后再签，签名对应最终文件）。
 4. 产物复制到 `releases/vX.Y.Z/` 并规范命名：`FindFlow-vX.Y.Z-win-x64-setup.exe`（来自 `bundle/nsis/FindFlow_X.Y.Z_x64-setup.exe`）、`FindFlow-vX.Y.Z-win-x64.msi`（来自 `bundle/msi/FindFlow_X.Y.Z_x64_zh-CN.msi`）。
 5. **对 MSI 副本执行显示名脚本**（见常用命令），必须在计算 SHA256 之前，且不要改 `target\` 下的原始产物。
-6. 生成 `SHA256SUMS.txt`、`latest.json`（签名取自 `.sig`，下载地址指向本版本 Release）、`source/` 快照（`git ls-files -co --exclude-standard`，排除 `releases/` 与 `.claude/`）；检查快照内无密钥。
-7. 提交 `release: FindFlow vX.Y.Z` → `git tag -a vX.Y.Z` → `git push origin main` → `git push origin vX.Y.Z`（只推这一个 tag）→ `gh release create` 上传 5 个文件 → 下载回来核对 SHA256。
+6. 生成 `SHA256SUMS.txt`；用 `node scripts/make-latest-json.mjs --version X.Y.Z --notes "…"` 生成 `latest.json`（为 NSIS 与 MSI 各写一条，缺签名会报错——不要手写）；生成 `source/` 快照（`git ls-files -co --exclude-standard`，排除 `releases/` 与 `.claude/`）并检查快照内无密钥。
+7. 提交 `release: FindFlow vX.Y.Z` → `git tag -a vX.Y.Z` → `git push origin main` → `git push origin vX.Y.Z`（只推这一个 tag）→ `gh release create` 上传 6 个文件（两个安装包、两个 `.sig`、`SHA256SUMS.txt`、`latest.json`）→ 下载回来核对 SHA256，并确认 `releases/latest/download/latest.json` 匿名可取、版本号正确。
 
 ## 安装包语言与显示名
 
 - NSIS 为简体中文（`SimpChinese`），MSI 为 `zh-CN` 且使用自定义资源 `src-tauri/windows/wix-zh-CN.wxl`（Tauri 内置的中文资源只翻译了语言代码）。
 - 「设置 → 应用」卸载列表里的名称带版本号（`FindFlow vX.Y.Z`）。`productName` 保持 `FindFlow` 不变：它同时决定卸载注册表键、安装目录与快捷方式名，带版本号会让每个版本各装一份、无法原地升级。
 - NSIS 由 `src-tauri/windows/installer-hooks.nsh` 在安装后写入显示名（每次覆盖升级自动刷新）；MSI 无对应配置，靠发布流程第 5 步的脚本。
-- 应用内目前**没有「检查更新」入口**（v0.6.0 因仓库私有而移除）；后端更新命令与 `latest.json` 仍在维护，仓库公开后下载地址已可匿名访问，恢复入口属于待办而非现状。
+- **应用内更新**（v0.8.2 起，设置 → 关于 / 菜单 帮助 → 检查更新）：只在用户点击时联网，绝不做后台自动检查（「基础功能不依赖网络」是产品底线）。更新器按 `windows-x86_64-<nsis|msi>` 优先、`windows-x86_64` 兜底取下载项，所以 `latest.json` 必须同时提供 NSIS 与 MSI 两条，否则 MSI 用户会被装上 NSIS 版而并存两份。安装流程无法在本机实测（不能在本机安装），发布前至少用内置公钥校验两个安装包的签名。
 
 ## 密钥与敏感信息
 
