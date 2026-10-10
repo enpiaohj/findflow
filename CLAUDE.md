@@ -9,6 +9,7 @@
 - **版本**：Semantic Versioning。当前 `v0.8.0` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
 - **Commit**：Conventional Commits（`feat:` / `fix:` / `docs:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
 - **发布产物**：安装包默认不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/` 与 `CHANGELOG.md` 入库，产物上传 GitHub Releases）。
+- **安装包语言与显示名**：NSIS 为简体中文（`SimpChinese`），MSI 为 `zh-CN` 且使用自定义资源 `src-tauri/windows/wix-zh-CN.wxl`。「设置 → 应用」卸载列表里的名称带版本号（`FindFlow v0.8.0`）；`productName` 保持 `FindFlow` 不变（它同时决定卸载注册表键、安装目录与快捷方式名，带版本号会让每个版本各装一份、无法原地升级）。NSIS 由 `src-tauri/windows/installer-hooks.nsh` 在安装后写入显示名（每次覆盖升级自动刷新）；MSI 无对应配置，**发布时**对复制到 `releases/vX.Y.Z/` 的 MSI 副本执行 `powershell -NoProfile -File scripts\msi-set-display-name.ps1 -Path <msi> -Name "FindFlow vX.Y.Z"`，须在计算 SHA256 之前，且不要改 `target\` 下的原始产物。
 - **设计文档**：产品设计文档与 UI 概念图维护于工作区 `D:\AIProjects\ai-coding-workspace\projects\FindFlow\01-产品设计\`，不入本仓库。
 - **历史**：旧仓库（截至 `v0.1.0` 及其后 3 个提交）已于 2026-09-24 完整备份至 `D:\AIProjects\_Backup\2026-09-24-FindFlow-操作前备份-v1.0.bundle`，本仓库自零重建；未经用户明确授权不得覆盖远程历史。
 - **公开前重建（2026-10-10）**：为去除提交里的个人邮箱并移除内部设计文档，已重写全部历史（作者统一为 GitHub noreply 地址，本地 git 已配置）并删除、同名重建 GitHub 仓库（仍为 Private；公开与否由用户决定，Claude 不得擅自改可见性）。重写前历史备份：`D:\AIProjects\_Backup\2026-10-10-FindFlow-历史重写前备份-v1.0.bundle`；旧 Release 附件备份：`D:\AIProjects\_Backup\2026-10-10-FindFlow-GitHub发布附件备份-v1.0\`。GitHub Releases **自 v0.7.1 起**，v0.2.0–v0.7.0 的 Release 与 tag 不再推送（本地 tag 保留，勿推送）。`docs/superpowers/` 已不再跟踪。
