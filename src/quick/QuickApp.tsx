@@ -29,6 +29,7 @@ import {
   recordSearch,
   removeSearch,
 } from "../searchHistory";
+import IdleHint from "./IdleHint";
 import SearchHistory from "./SearchHistory";
 import type { Density } from "../types";
 import {
@@ -582,7 +583,14 @@ export default function QuickApp() {
             filtered={hasQuery || filter !== "all"}
             shown={items.length}
           />
-          {browseHidden ? null : (
+          {browseHidden ? (
+            <IdleHint
+              onPick={(term) => {
+                setQuery(term);
+                inputRef.current?.focus();
+              }}
+            />
+          ) : (
             <ResultList
               items={items}
               density={density}

@@ -1096,6 +1096,66 @@ body.col-resizing {
   padding: 8px 18px;
 }
 
+/* ---------- 空搜索引导（隐藏结果列表时） ---------- */
+
+.idle-hint {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 24px 48px;
+}
+
+.idle-hint-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.idle-hint-sub {
+  margin: 0 0 14px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.idle-hint-tips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px));
+  gap: 8px;
+}
+
+.idle-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.idle-tip:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+.idle-tip code {
+  font-family: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: var(--fs-sm);
+  color: var(--accent-text);
+}
+
+.idle-tip span {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
 /* ---------- 底栏 ---------- */
 
 .footerbar {
