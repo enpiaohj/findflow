@@ -1,0 +1,19 @@
+{
+  "version": "0.8.3",
+  "notes": "修复窗口内部点击误隐藏；按实际隐藏原因管理搜索会话，打开文件后保留结果；托盘提示与原生窗口标题（含静默开机启动）显示运行时版本；同步版本定义并详细更新关联文档。",
+  "pub_date": "2026-10-14T01:13:30Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ2xUTGs1c1VaVVhjTnluWjM0dVQxL1M5dkdzbW1RbnlwV3hmNnF3ZU85ZzdrUG5YcExBWEFRQTRWd2lySVVrMlhvOHcrVE1sQWFIcTBvTFR0VDVzR2dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTQwNDA5CWZpbGU6RmluZEZsb3ctdjAuOC4zLXdpbi14NjQtc2V0dXAuZXhlCXZlcnNpb246MC44LjMKV0FwVmVUOU5ESW9uQUZpRWVyV2dYcm5QNitnd004ZnlTR01XU2x2ckR0OVgvbXUxWkxNNUUwajlqZ2libnFCNi9sYmtyRksyMjVxbzJ3b3UrK01sQlE9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.8.3/FindFlow-v0.8.3-win-x64-setup.exe"
+    },
+    "windows-x86_64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ25pL2VLaUY3TU9MSWF0Mmx3SllYY3B4WW5XVmpydlN3YlJpendqU1ZOWFY1ODBmZkN1RVVJMHJEZW1vMUFidDNuZXRFOFZaaVZnU0U4ZzNsd0xXM0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTQwNDEwCWZpbGU6RmluZEZsb3ctdjAuOC4zLXdpbi14NjQubXNpCXZlcnNpb246MC44LjMKVmpnTXlOVmk0K2ZsNzRlbmJZVVFwWW8vU01lekFFWFNDdVRpemFSSk5rdDJiV0tTOHFGZG1WWEU4QktOTjk2UjE0R0tkNFdvSllTeWJYclZyUDBlQnc9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.8.3/FindFlow-v0.8.3-win-x64.msi"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ2xUTGs1c1VaVVhjTnluWjM0dVQxL1M5dkdzbW1RbnlwV3hmNnF3ZU85ZzdrUG5YcExBWEFRQTRWd2lySVVrMlhvOHcrVE1sQWFIcTBvTFR0VDVzR2dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTQwNDA5CWZpbGU6RmluZEZsb3ctdjAuOC4zLXdpbi14NjQtc2V0dXAuZXhlCXZlcnNpb246MC44LjMKV0FwVmVUOU5ESW9uQUZpRWVyV2dYcm5QNitnd004ZnlTR01XU2x2ckR0OVgvbXUxWkxNNUUwajlqZ2libnFCNi9sYmtyRksyMjVxbzJ3b3UrK01sQlE9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.8.3/FindFlow-v0.8.3-win-x64-setup.exe"
+    }
+  }
+}
