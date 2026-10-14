@@ -142,9 +142,17 @@ pub async fn action_open(app: tauri::AppHandle, path: String) -> Result<String, 
     if !exists {
         return Err("路径不存在，可能已被移动或删除".into());
     }
+    // 在系统打开操作引发失焦之前隐藏，明确标记为继续同一搜索会话。
+    crate::window_session::hide(&app, "open-file")?;
     app.opener()
         .open_path(path.clone(), None::<&str>)
-        .map_err(|e| format!("打开失败：{e}"))?;
+        .map_err(|e| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            format!("打开失败：{e}")
+        })?;
     record_recent(&app, &path, "open");
     Ok("已打开".into())
 }

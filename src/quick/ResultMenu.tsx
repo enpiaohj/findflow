@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   actionOpen,
   actionLocate,
@@ -78,7 +77,6 @@ export default function ResultMenu({ item, pos, onClose, onNotice, onRefresh, in
   /** 打开文件：先隐藏搜索窗再打开，避免启动器窗口压在刚打开的程序上面
    *  （与回车键打开的行为一致；开启「失焦自动隐藏」时效果相同，关闭时才有差别）。 */
   const openItem = () => {
-    void getCurrentWindow().hide();
     run(actionOpen(path));
   };
 

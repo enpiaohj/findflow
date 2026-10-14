@@ -6,7 +6,7 @@
 
 - **产品名**：FindFlow
 - **仓库**：`findflow`（GitHub：`enpiaohj/findflow`，**Public**，MIT 许可证，默认分支 `main`）。2026-10-10 由用户决定转为公开；不得擅自修改可见性。
-- **版本**：Semantic Versioning。当前 `v0.8.2` 已发布（2026-10-10），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
+- **版本**：Semantic Versioning。当前发布版本 `v0.8.3`（2026-10-14），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
 - **Commit**：Conventional Commits（`feat:` / `fix:` / `perf:` / `docs:` / `build:` / `test:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
 - **提交身份**：本仓库只用 GitHub noreply 地址 `250103182+enpiaohj@users.noreply.github.com` 提交（本地 git 已配置）。用户明确要求「不体现邮箱地址」，任何提交、tag、文档中都不得出现真实邮箱。
 - **发布产物**：安装包不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/`、`CHANGELOG.md`、`SHA256SUMS.txt`、`latest.json`、`.sig` 入库，安装包上传 GitHub Releases）。
@@ -49,6 +49,10 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust（核心）；SQLite�
 - **网络共享**（`scanner.rs`）：UNC 范围不取文件标识、不预统计，4 线程并行读目录、条目处理与写库仍串行；不做实时监听，靠校准。
 - **破坏性操作**（`actions.rs`）：一次性确认令牌（系统 CSPRNG，绑定请求指纹，60 秒有效）+ 稳定 `file_id` 与当前路径双重校验；`recycleItem`（前端）是右键菜单与菜单栏共用的唯一入口。
 - **前端纯逻辑**放在 `src/*.ts`（`layout`、`highlight`、`searchScope`、`searchHistory`、`startView`）并配单元测试；组件里不要内联可测试的逻辑。
+- **窗口会话**（v0.8.3 起）：主窗隐藏统一通过 `window_session::hide`；前端主动隐藏调用 `app_hide`，后端快捷键与关闭事件也走该入口。实际隐藏后发出 `findflow-hidden`，载荷 `{ reason, clear }`；`reason` 为 `manual` / `blur` / `open-file`，`clear` 在隐藏时读取已保存的 `ui.clearOnHide`（缺省 true，保留旧设置）。不要用前端 `onFocusChanged(false)` 清空搜索，也不要绕过统一入口直接隐藏主窗。
+- **失焦判定**：延迟 150 ms，使用 generation 取消已过期检查，并在主线程复核前台窗口所属进程、窗口可见性、焦点和 `ui.blurHide`。原生标题栏、菜单及应用内对话框的暂时焦点切换不应隐藏。打开文件必须在系统操作引发失焦之前以 `open-file` 原因隐藏，系统打开失败时重新显示窗口。
+- **会话重置**：`src/windowSession.ts` 只允许 `manual` / `blur` 结束会话；打开文件保留查询与结果。清空时取消旧搜索响应并递增会话修订号，防止查询条件本来为空时无法触发重新加载。搜索历史独立保留；清空不等于安全擦除。设置开关完成保存后直接隐藏应使用数据库最新值。
+- **版本显示**：托盘提示和原生窗口标题共用 `tray::version_label`，版本来自 `app.package_info().version`；标题栏与关于页通过 `getVersion()` 读取。不要硬编码显示版本，也不要为显示版本修改 `productName` 或应用标识。npm 与 Cargo 的根包版本及 lock 文件应同步。
 - **样式**：颜色、间距、字号、圆角、动效一律用 `src/styles.css` 顶部的设计令牌，不要硬编码；浮层用 `--surface-pop` / `--border-pop` / `--shadow-pop`。
 
 ## 测试与环境注意
@@ -57,6 +61,7 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust（核心）；SQLite�
 - **脚本写文件的坑**：用 Python / sed / heredoc 向源码写入含反斜杠的内容容易丢转义或被当成转义（如 `\2026`）；含反斜杠的修改优先用编辑工具，或用原始字符串并事后核对。
 - **界面验证**：可用 `dist/` + 给 `window.__TAURI_INTERNALS__` 打桩 + Edge 无头模式渲染截图；注意无头环境带「减少动效」且视口比窗口尺寸矮约 92px。这只是渲染验证，不能替代真机点击。
 - **不要在本机实际安装测试包**：会覆盖用户现有 FindFlow 的卸载注册表项；安装器只做静态验证，实机安装由用户进行。
+- **窗口回归**：前端会话策略单元测试不覆盖原生焦点。发布前检查标题栏单击 / 拖动、菜单 / 对话框、真正切换应用、主动隐藏、打开文件后返回、空查询反复隐藏，以及设置页完成开关保存后直接隐藏。Rust 测试、clippy 和桌面构建缺失时不得以仅前端验证宣称可发布。
 
 ## 发布流程要点（在全局 release 规则之上）
 

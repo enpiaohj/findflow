@@ -13,7 +13,7 @@ import {
 /** 常规：应用启动、窗口行为与退出。 */
 export default function RegularPage({ notice }: PageCtx) {
   const [blurHide, setBlurHide] = useState(true);
-  const [clearOnHide, setClearOnHide] = useState(false);
+  const [clearOnHide, setClearOnHide] = useState(true);
   const [autostart, setAutostart] = useState(false);
   const [showTray, setShowTray] = useState(true);
   const [autoCalibrate, setAutoCalibrate] = useState(true);
@@ -21,7 +21,7 @@ export default function RegularPage({ notice }: PageCtx) {
 
   useEffect(() => {
     getSetting<boolean>("ui.blurHide").then((v) => v !== null && setBlurHide(v)).catch(() => undefined);
-    getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(!!v)).catch(() => undefined);
+    getSetting<boolean>("ui.clearOnHide").then((v) => setClearOnHide(v !== false)).catch(() => undefined);
     getSetting<boolean>("ui.showTrayIcon")
       .then((v) => setShowTray(v !== null ? !!v : true))
       .catch(() => undefined);
@@ -89,7 +89,7 @@ export default function RegularPage({ notice }: PageCtx) {
         <div className="toggle-row">
           <div>
             <b>隐藏时清空搜索词</b>
-            <p className="muted">开启后窗口隐藏即清空搜索词（避免敏感词残留）；默认关闭，打开文件返回后保留上次搜索</p>
+            <p className="muted">默认开启：主动隐藏或失焦自动隐藏时清空；打开文件时保留搜索，窗口仅失焦但未隐藏时也保留</p>
           </div>
           <input
             type="checkbox"

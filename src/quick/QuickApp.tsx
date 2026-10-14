@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { shouldClearSession } from "../windowSession";
 import TitleBar from "../components/TitleBar";
 import ResultList from "../components/ResultList";
 import FooterBar from "../components/FooterBar";
@@ -25,6 +26,7 @@ import {
   actionCopyFiles,
   pathProbe,
   appExit,
+  appHide,
   favoriteToggle,
   scanStatus,
   scopesList,
@@ -56,8 +58,6 @@ import {
 const DENSITY_KEY = "ui.density";
 const PREVIEW_PANE_KEY = "ui.previewPane";
 const PREVIEW_PANE_WIDTH_KEY = "ui.previewPaneWidth";
-// 隐藏时是否清空搜索词（隐私选项，默认关闭：打开文件返回后保留上次搜索）
-const CLEAR_ON_HIDE_KEY = "ui.clearOnHide";
 
 const FILTER_QUERY: Record<FilterId, string> = {
   all: "",
@@ -113,7 +113,7 @@ export default function QuickApp() {
   const [navigated, setNavigated] = useState(false);
   const { confirm, confirmEl } = useConfirm();
   const [hotkey, setHotkey] = useState("Alt+Q");
-  const [clearOnHide, setClearOnHide] = useState(false);
+  const [sessionRevision, setSessionRevision] = useState(0);
   const [startView, setStartViewState] = useState<StartViewSetting>({
     ...DEFAULT_START_VIEW,
   });
@@ -226,9 +226,6 @@ export default function QuickApp() {
         if (v) setHotkey(v);
       })
       .catch(() => undefined);
-    getSetting<boolean>(CLEAR_ON_HIDE_KEY)
-      .then((v) => setClearOnHide(!!v))
-      .catch(() => undefined);
     getSetting<boolean>(SEARCH_HISTORY_ENABLED_KEY)
       .then((v) => setHistoryEnabled(v !== null ? !!v : true))
       .catch(() => undefined);
@@ -236,8 +233,10 @@ export default function QuickApp() {
 
   // 索引位置与启动列表设置：启动与关闭设置视图后刷新
   useEffect(() => {
-    if (!settingsOpen) void refreshStartView();
-  }, [refreshStartView, settingsOpen]);
+    if (!settingsOpen) {
+      void refreshStartView();
+    }
+  }, [refreshStartView, settingsOpen, notice]);
 
   // 搜索历史：启动与关闭设置视图后刷新（设置页可能已关闭或清空历史）
   const reloadHistory = useCallback(() => {
@@ -255,35 +254,54 @@ export default function QuickApp() {
     if (!settingsOpen) reloadHistory();
   }, [reloadHistory, settingsOpen]);
 
-  // 窗口失焦（自动隐藏）时清空搜索词与浮层；重新呼出时聚焦输入框。
+  // 实际隐藏才结束会话；WebView 内部或原生标题栏的焦点变化不清词。
   const settingsOpenRef = useRef(false);
   useEffect(() => {
     settingsOpenRef.current = settingsOpen;
   }, [settingsOpen]);
-  const clearOnHideRef = useRef(false);
-  useEffect(() => {
-    clearOnHideRef.current = clearOnHide;
-  }, [clearOnHide]);
 
   useEffect(() => {
     const win = getCurrentWindow();
-    const unlistenP = win.onFocusChanged(({ payload: focused }) => {
-      if (!focused) {
+    const unlistenHidden = win.listen<{ reason: string; clear: boolean }>("findflow-hidden", ({ payload }) => {
         // 隐藏前记录当前搜索词（设置视图打开期间不记录，用户可能正在编辑）
         if (!settingsOpenRef.current && queryRef.current.trim()) {
           recordSearchTerm(queryRef.current);
         }
-        // 仅在用户开启隐私选项时清空搜索词；设置视图打开期间一律保留（用户可能正在编辑）
-        if (!settingsOpenRef.current && clearOnHideRef.current) setQuery("");
+        // 打开文件引起的隐藏保留会话；其他隐藏遵循清空开关。
+        if (payload.clear && shouldClearSession(payload.reason)) {
+          searchGen.current += 1;
+          setSessionRevision((value) => value + 1);
+          queryRef.current = "";
+          setQuery("");
+          setItems([]);
+          setSelectedIndex(0);
+          setMatched(0);
+          setMatchedPending(false);
+          setSearched(false);
+          setStale(false);
+          setElapsed(0);
+          setFilter("all");
+          setBrowseSortOverride(null);
+          setSearchSort("relevance");
+          navigatedRef.current = false;
+          setNavigated(false);
+          setRenameFor(null);
+          setMenubarOpen(false);
+        }
         setHistoryOpen(false);
         setPreviewOpen(false);
         setMenuFor(null);
         setSortOpen(false);
-      } else if (!settingsOpenRef.current) {
+    });
+    const unlistenP = win.onFocusChanged(({ payload: focused }) => {
+      if (focused && !settingsOpenRef.current) {
         window.setTimeout(() => inputRef.current?.focus(), 60);
       }
     });
-    return () => void unlistenP.then((f) => f());
+    return () => {
+      void unlistenP.then((f) => f());
+      void unlistenHidden.then((f) => f());
+    };
   }, [recordSearchTerm]);
 
   const hasQuery = query.trim().length > 0;
@@ -443,7 +461,7 @@ export default function QuickApp() {
   useEffect(() => {
     const t = window.setTimeout(runSearch, 50);
     return () => window.clearTimeout(t);
-  }, [runSearch]);
+  }, [runSearch, sessionRevision]);
 
   // 从设置返回：索引范围的启用状态可能变了，重新查询让命中数与「索引 N 条」同步
   useEffect(() => {
@@ -558,7 +576,6 @@ export default function QuickApp() {
                 notice("路径不存在：" + pathMode);
                 return;
               }
-              void getCurrentWindow().hide();
               return actionOpen(pathMode).then(() => notice("已打开 " + pathMode));
             })
             .catch((e) => notice(String(e)));
@@ -572,7 +589,6 @@ export default function QuickApp() {
             .catch((e) => notice(String(e)));
         } else {
           const target = it.path;
-          void getCurrentWindow().hide();
           actionOpen(target)
             .then(() => notice("已打开 " + target.split("\\").pop()))
             .catch((e) => notice(String(e)));
@@ -586,7 +602,7 @@ export default function QuickApp() {
         if (query) {
           setQuery("");
         } else {
-          void getCurrentWindow().hide();
+          appHide().catch((e) => notice(String(e)));
         }
       } else if (event.key === "l" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
@@ -633,7 +649,6 @@ export default function QuickApp() {
           disabled: noSel,
           onSelect: () => {
             if (!selected) return;
-            void getCurrentWindow().hide();
             noteResult(actionOpen(selected.path));
           },
         },
@@ -692,7 +707,7 @@ export default function QuickApp() {
           },
         },
         { kind: "sep" },
-        { kind: "item", label: "隐藏窗口", hint: "Esc", onSelect: () => void getCurrentWindow().hide() },
+        { kind: "item", label: "隐藏窗口", hint: "Esc", onSelect: () => appHide().catch((e) => notice(String(e))) },
         { kind: "item", label: "退出 FindFlow", onSelect: () => appExit().catch((e) => notice(String(e))) },
       ],
     },

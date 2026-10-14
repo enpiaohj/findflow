@@ -5,6 +5,10 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
+pub(crate) fn version_label(version: &str) -> String {
+    format!("FindFlow v{version}")
+}
+
 /// 创建托盘图标；`visible` 为 false 时创建后立即隐藏（对应设置项 ui.showTrayIcon）。
 pub fn build(app: &AppHandle, visible: bool) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, "show", "显示 FindFlow", true, None::<&str>)?;
@@ -13,7 +17,7 @@ pub fn build(app: &AppHandle, visible: bool) -> tauri::Result<()> {
 
     let tray = TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().expect("应用图标已配置").clone())
-        .tooltip("FindFlow")
+        .tooltip(version_label(&app.package_info().version.to_string()))
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -64,4 +68,12 @@ pub fn tray_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn app_exit(app: AppHandle) {
     app.exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tooltip_includes_runtime_version() {
+        assert_eq!(super::version_label("0.8.3"), "FindFlow v0.8.3");
+    }
 }

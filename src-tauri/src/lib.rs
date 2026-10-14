@@ -28,6 +28,7 @@ pub mod tray;
 pub mod updater_cmd;
 pub mod util;
 pub mod watcher;
+pub mod window_session;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -46,6 +47,10 @@ fn is_autostart_launch() -> bool {
 
 /// 首次显示主窗（显示 + 聚焦）；已显示过或开机自启时不做任何事。
 fn show_main_once(app: &tauri::AppHandle) {
+    // 静默开机启动同样初始化标题；以后从托盘呼出时无需重复初始化。
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(&tray::version_label(&app.package_info().version.to_string()));
+    }
     if is_autostart_launch() || MAIN_SHOWN.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -107,7 +112,7 @@ pub fn run() {
                     if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                                let _ = window_session::hide(app, "manual");
                             } else {
                                 let _ = w.show();
                                 let _ = w.set_focus();
@@ -320,26 +325,24 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::Focused(false) => {
-                // 配置窗口先于 setup 创建，AppState 可能尚未注册
-                let Some(state) = window.try_state::<std::sync::Arc<AppState>>() else {
-                    return;
-                };
+            WindowEvent::Focused(focused) => {
                 if window.label() == "main" {
-                    let blur_hide = state.db.get_or("ui.blurHide", serde_json::json!(true));
-                    if blur_hide.as_bool().unwrap_or(true) {
-                        window.hide().ok();
-                    }
+                    window_session::focus_changed(window.app_handle(), *focused);
                 }
             }
             WindowEvent::CloseRequested { api, .. } => {
                 // 两个窗口都只隐藏不销毁：管理窗销毁后齿轮将无法再次打开
                 api.prevent_close();
-                window.hide().ok();
+                if window.label() == "main" {
+                    let _ = window_session::hide(window.app_handle(), "manual");
+                } else {
+                    window.hide().ok();
+                }
             }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            window_session::app_hide,
             tray::tray_set_visible,
             tray::app_exit,
             settings::get_setting,
