@@ -22,6 +22,7 @@ pub mod scope;
 pub mod search;
 pub mod searchindex;
 pub mod settings;
+pub mod storage;
 pub mod shellicon;
 pub mod tokenizer;
 pub mod tray;
@@ -88,8 +89,73 @@ impl AppState {
     }
 }
 
+fn startup_error_message(data_dir: Option<&std::path::Path>, error: &dyn std::fmt::Display) -> String {
+    let location = data_dir
+        .map(|path| format!("数据目录：{}", path.display()))
+        .unwrap_or_else(|| "数据目录：尚未能确定".into());
+    format!(
+        "FindFlow 无法完成启动。\n\n{location}\n\n错误详情：{error}\n\n请检查数据目录所在磁盘是否已连接、目录访问权限，以及目录链接（junction）的目标是否存在。若曾移动数据，请先恢复原数据目录或链接目标，再重新启动。\n\n请勿删除原数据库或直接新建空目录替代，以免丢失原有设置与索引范围。"
+    )
+}
+
+#[cfg(test)]
+mod startup_tests {
+    #[test]
+    fn startup_error_includes_path_cause_and_recovery_guidance() {
+        let path = std::path::Path::new("missing-data");
+        let message = super::startup_error_message(Some(path), &"os error 183");
+        assert!(message.contains("数据目录：missing-data"));
+        assert!(message.contains("os error 183"));
+        assert!(message.contains("junction"));
+        assert!(message.contains("请勿删除原数据库"));
+    }
+}
+
+fn show_startup_error(message: &str) {
+    tracing::error!("{}", message);
+    eprintln!("{message}");
+    // 启动可能在 dialog 插件或事件循环就绪前失败，使用已有 Windows API 显示提示。
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+        let title: Vec<u16> = "FindFlow 启动失败".encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONERROR);
+        }
+    }
+}
+
+fn prepare_storage_with_recovery(
+    app: &tauri::AppHandle,
+    marker: &std::path::Path,
+    default: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let _ = app;
+    loop {
+        match storage::prepare(marker, default) {
+            Ok(dir) => return Ok(dir),
+            Err(error) => {
+                let message = format!("数据目录检查失败：{error}\n\n点击“是”选择包含 findflow.db 的已有目录；点击“否”重新检查原目录；取消将退出。数据库损坏时请使用完整备份，原数据库不会被删除。");
+                match storage::recovery_action(&message) {
+                    1 => {
+                        if let Some(selected) = storage::pick_existing_folder()? {
+                            if let Err(error) = storage::select_existing(marker, &selected) {
+                                show_startup_error(&format!("无法接入此目录：{error}\n原数据与位置配置已保留，可重新选择。"));
+                            }
+                        }
+                    }
+                    2 => continue,
+                    _ => return Err(error),
+                }
+            }
+        }
+    }
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .plugin(
             tauri_plugin_single_instance::init(|app, _args, _cwd| {
                 if let Some(w) = app.get_webview_window("main") {
@@ -132,66 +198,39 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            let mut startup_data_dir = None;
+            let setup_result = (|| -> Result<(), Box<dyn std::error::Error>> {
             // 窗口保持隐藏，等首屏加载完成后由 on_page_load 显示
 
             let default_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&default_dir)?;
-            // 存储位置：默认目录下的 storage-location.txt 指向自定义目录；
-            // 首次切换时自动迁移数据库文件（索引不迁移，重建即可）。
-            let data_dir = match std::fs::read_to_string(default_dir.join("storage-location.txt")) {
-                Ok(s) => {
-                    let p = std::path::PathBuf::from(s.trim());
-                    if p.as_os_str().is_empty() {
-                        default_dir.clone()
-                    } else {
-                        let _ = std::fs::create_dir_all(&p);
-                        if default_dir.join("findflow.db").exists() && !p.join("findflow.db").exists() {
-                            let mut migrated = true;
-                            for suffix in ["", "-wal", "-shm"] {
-                                let from = default_dir.join(format!("findflow.db{}", suffix));
-                                if from.exists()
-                                    && std::fs::copy(&from, p.join(format!("findflow.db{}", suffix))).is_err()
-                                {
-                                    migrated = false;
-                                }
-                            }
-                            if migrated {
-                                // 迁移成功后删除旧库，避免旧数据目录长期残留（曾造成 GB 级冗余）。
-                                // 索引与日志不迁移：索引在新位置重建，日志继续写新位置。
-                                for suffix in ["", "-wal", "-shm"] {
-                                    let _ = std::fs::remove_file(default_dir.join(format!("findflow.db{suffix}")));
-                                }
-                                let _ = std::fs::remove_dir_all(default_dir.join("index"));
-                                tracing::info!("数据库已迁移至 {:?}，旧库文件已清理", p);
-                            } else {
-                                tracing::warn!("数据库迁移未完成，保留旧文件以便重试");
-                            }
-                        }
-                        p
-                    }
-                }
-                Err(_) => default_dir.clone(),
-            };
-            logger::init(&data_dir);
+            startup_data_dir = Some(default_dir.clone());
+            let marker = storage::config_path(app.handle())?;
+            let data_dir = prepare_storage_with_recovery(app.handle(), &marker, &default_dir)?;
+            startup_data_dir = Some(data_dir.clone());
             // 扫描与监听跳过自身数据目录，防止范围包含数据目录时自我触发
             util::set_app_data_dir(&data_dir);
 
             // 界面专用连接 + 后台专用连接（WAL 读写并发互不阻塞）
             let conn = db::open(&data_dir.join("findflow.db"))?;
+            // 首次创建成功后也记录位置，后续丢失时不能误当新安装。
+            storage::remember_initialized(&marker, &data_dir)?;
+            logger::init(&data_dir)?;
             let conn_bg = db::open(&data_dir.join("findflow.db"))?;
             let conn_stats = db::open(&data_dir.join("findflow.db"))?;
             let store = Arc::new(settings::SettingsStore::new(conn));
             let index = searchindex::SearchIndex::open_or_create(&data_dir.join("index"))?;
-            if index.fresh {
+            if index.fresh || data_dir.join("index/.ff-rebuild-pending").try_exists()? {
                 // 索引重建：后台分块入队（避免启动期长事务阻塞界面主线程）
                 let bg_enqueue = Arc::new(crate::settings::DbHandle::new(db::open(
                     &data_dir.join("findflow.db"),
                 )?));
-                // 索引全量重放：旧的待处理事件已无意义，先清空避免重复处理
-                bg_enqueue.with_conn(|c| c.execute("DELETE FROM index_outbox", []).ok());
+                // 保留已有 outbox；中断后从头重放，upsert 按 file_id 幂等更新。
+                let pending = data_dir.join("index/.ff-rebuild-pending");
+                std::fs::File::create(&pending)?.sync_all()?;
                 std::thread::Builder::new()
                     .name("reindex-enqueue".into())
                     .spawn(move || {
+                        let result = (|| -> Result<(), String> {
                         let mut last: i64 = 0;
                         loop {
                             let batch_max: i64 = bg_enqueue
@@ -205,29 +244,29 @@ pub fn run() {
                                         |r| r.get::<_, i64>(0),
                                     )
                                     .map_err(|e| e.to_string())
-                                })
-                                .unwrap_or(0);
+                                })?;
                             if batch_max <= last {
                                 break;
                             }
-                            let n = bg_enqueue.with_conn(|c| {
+                            bg_enqueue.with_conn(|c| {
                                 c.execute(
                                     "INSERT INTO index_outbox(file_id, operation, created_ms)
                                      SELECT file_id, 'upsert', ?3 FROM files
                                      WHERE file_id > ?1 AND file_id <= ?2",
                                     rusqlite::params![last, batch_max, crate::util::now_ms()],
                                 )
-                            })
-                            .unwrap_or(0);
-                            if n == 0 {
-                                break;
-                            }
+                            }).map_err(|e| e.to_string())?;
                             last = batch_max;
                             std::thread::sleep(std::time::Duration::from_millis(60));
                         }
-                        tracing::info!("索引重建入队完成");
-                    })
-                    .ok();
+                        std::fs::remove_file(pending).map_err(|e| e.to_string())?;
+                        Ok(())
+                        })();
+                        match result {
+                            Ok(()) => tracing::info!("索引重建入队完成"),
+                            Err(error) => tracing::error!("索引重建入队失败，下次启动继续：{error}"),
+                        }
+                    })?;
             }
 
             let bg_db = Arc::new(crate::settings::DbHandle::new(conn_bg));
@@ -322,6 +361,13 @@ pub fn run() {
             // 自动正文抽取：默认关闭（待抽取量可达 27 万文件 / 54 GB，需数小时读盘），
             // 由用户在设置中开启后才在后台逐步建立正文索引。
             extract::start_auto_fulltext(app.handle().clone());
+            Ok(())
+            })();
+            if let Err(error) = setup_result {
+                show_startup_error(&startup_error_message(startup_data_dir.as_deref(), &error));
+                // setup 返回 Err 会被 Tauri 转成 panic；提示关闭后直接以失败状态退出。
+                std::process::exit(1);
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -420,8 +466,11 @@ pub fn run() {
             storage_cmd::set_data_dir,
             storage_cmd::relaunch_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("FindFlow 启动失败");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        show_startup_error(&startup_error_message(None, &error));
+        std::process::exit(1);
+    }
 }
 
 pub mod storage_cmd {
@@ -467,7 +516,8 @@ pub mod storage_cmd {
     /// 默认数据目录：当它不同于当前生效目录时，其中的数据库与索引即旧数据残留。
     fn legacy_dir_of(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let default_dir = app.path().app_data_dir().ok()?;
-        let same = dunce::simplified(&default_dir) == dunce::simplified(data_dir);
+        // 无法解析任一入口时禁止清理；junction 别名可能指向当前库。
+        let same = crate::storage::same_directory(&default_dir, data_dir).unwrap_or(true);
         if same || !default_dir.join("findflow.db").exists() {
             return None;
         }
@@ -533,8 +583,8 @@ pub mod storage_cmd {
 
     /// 更改存储位置：写入指针文件，重启后自动迁移数据库并重建索引。
     #[tauri::command]
-    pub fn set_data_dir(
-        _state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    pub async fn set_data_dir(
+        state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
         app: tauri::AppHandle,
         new_dir: String,
     ) -> Result<(), String> {
@@ -542,18 +592,16 @@ pub mod storage_cmd {
         if p.as_os_str().is_empty() {
             return Err("路径不能为空".into());
         }
-        std::fs::create_dir_all(&p).map_err(|e| format!("无法创建目录：{e}"))?;
-        if crate::scope::is_protected(&crate::util::normalize_path(&p)) {
-            return Err("系统与程序目录受保护，不能作为存储位置".into());
-        }
-        let marker = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("storage-location.txt");
-        std::fs::write(&marker, p.to_string_lossy().as_bytes())
-            .map_err(|e| format!("写入失败：{e}"))?;
-        Ok(())
+        let source = state.data_dir.clone();
+        let marker = crate::storage::config_path(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            static CHANGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = CHANGE_LOCK.try_lock().map_err(|_| "正在更改存储位置，请稍后重试")?;
+            if crate::scope::is_protected(&crate::util::normalize_path(&p)) {
+                return Err("系统与程序目录受保护，不能作为存储位置".into());
+            }
+            crate::storage::schedule(&marker, &source, &p)
+        }).await.map_err(|e| e.to_string())?
     }
 
     /// 重启应用（应用存储位置迁移后调用）。

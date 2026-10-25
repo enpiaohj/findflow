@@ -388,6 +388,8 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
             let excluded = (!self.opts.include_hidden && util::is_hidden(attrs))
                 || crate::scope::segment_excluded(&name, self.opts);
             if meta.is_dir() {
+                // 仅解析重解析点入口，常规目录和文件不做额外 canonicalize。
+                if attrs & 0x400 != 0 { util::register_data_alias(&path); }
                 if excluded
                     || name.starts_with('$')
                     || crate::scope::is_protected(&name)
@@ -437,6 +439,8 @@ impl<'a, F: FnMut(Vec<FileUpsert>)> Walk<'a, F> {
 
 /// 阶段一：快速统计范围总数（仅枚举目录项，不打开文件取标识）。
 fn count_dir(root: &Path, opts: &ScopeOptions, ctx: Option<&JobContext>) -> (u64, u64) {
+    util::register_data_alias(root);
+    if util::is_app_data_path(&util::normalize_path(root)) { return (0, 0); }
     let mut w = Walk {
         opts,
         count_only: true,
@@ -463,6 +467,8 @@ fn walk_dir(
     known: Option<&mut KnownMap>,
     on_batch: impl FnMut(Vec<FileUpsert>),
 ) -> u64 {
+    util::register_data_alias(root);
+    if util::is_app_data_path(&util::normalize_path(root)) { return 0; }
     let mut w = Walk {
         opts,
         count_only: false,

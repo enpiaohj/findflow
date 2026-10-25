@@ -6,7 +6,7 @@
 
 - **产品名**：FindFlow
 - **仓库**：`findflow`（GitHub：`enpiaohj/findflow`，**Public**，MIT 许可证，默认分支 `main`）。2026-10-10 由用户决定转为公开；不得擅自修改可见性。
-- **版本**：Semantic Versioning。当前发布版本 `v0.8.3`（2026-10-14），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
+- **版本**：Semantic Versioning。当前发布版本 `v0.9.0`（2026-10-25），后续开发基于此。旧仓库历史中的 `v0.1.0` 已发布并随旧历史归档（见下），**不得再次发布 v0.1.0**；已发布版本见 `releases/` 目录。
 - **Commit**：Conventional Commits（`feat:` / `fix:` / `perf:` / `docs:` / `build:` / `test:` 等），描述用简体中文；发布提交格式 `release: FindFlow vX.Y.Z`；Tag 格式 `vX.Y.Z`。
 - **提交身份**：本仓库只用 GitHub noreply 地址 `250103182+enpiaohj@users.noreply.github.com` 提交（本地 git 已配置）。用户明确要求「不体现邮箱地址」，任何提交、tag、文档中都不得出现真实邮箱。
 - **发布产物**：安装包不入 Git History；正式发布时创建 `releases/vX.Y.Z/` 不可变快照（`source/`、`CHANGELOG.md`、`SHA256SUMS.txt`、`latest.json`、`.sig` 入库，安装包上传 GitHub Releases）。
@@ -53,6 +53,7 @@ Tauri 2 + React 18 + TypeScript + Vite（前端）；Rust（核心）；SQLite�
 - **失焦判定**：延迟 150 ms，使用 generation 取消已过期检查，并在主线程复核前台窗口所属进程、窗口可见性、焦点和 `ui.blurHide`。原生标题栏、菜单及应用内对话框的暂时焦点切换不应隐藏。打开文件必须在系统操作引发失焦之前以 `open-file` 原因隐藏，系统打开失败时重新显示窗口。
 - **会话重置**：`src/windowSession.ts` 只允许 `manual` / `blur` 结束会话；打开文件保留查询与结果。清空时取消旧搜索响应并递增会话修订号，防止查询条件本来为空时无法触发重新加载。搜索历史独立保留；清空不等于安全擦除。设置开关完成保存后直接隐藏应使用数据库最新值。
 - **版本显示**：托盘提示和原生窗口标题共用 `tray::version_label`，版本来自 `app.package_info().version`；标题栏与关于页通过 `getVersion()` 读取。不要硬编码显示版本，也不要为显示版本修改 `productName` 或应用标识。npm 与 Cargo 的根包版本及 lock 文件应同步。
+- **存储恢复**（v0.9.0 起）：`storage.rs` 统一检查和切换数据位置；位置配置独立保存于系统配置目录下 `<identifier>.storage/location.json`，兼容旧 `storage-location.txt`。成功初始化后记录位置；已记录位置丢失时进入原生恢复窗口，不创建替代空库。恢复接入与迁移做完整数据库检查，普通启动只做轻量检查。迁移只接受空目标，生成包含 WAL 的快照并校验，切换配置前持有源库写锁，保留原数据库与索引。旧数据清理须比较 canonical 路径，无法解析则禁止清理。索引格式变化或可识别损坏（含 reader/writer 初始化）先备份再重建并设置 `fresh`，普通 I/O 与锁错误不得清空索引。创建索引前持久化 `.ff-rebuild-pending`，全量重放不得删除已有 outbox，仅所有批次成功入队后清除标记，中断后重启从头幂等重放。旧指针指向空目标且默认库仍在时按待迁移计划处理。目录完整检查在 blocking 任务执行，首次初始化顺序为建库、记录位置、日志。扫描与监听注册范围入口别名，扫描额外检查目录重解析点，避免自身数据经 junction 回灌。
 - **样式**：颜色、间距、字号、圆角、动效一律用 `src/styles.css` 顶部的设计令牌，不要硬编码；浮层用 `--surface-pop` / `--border-pop` / `--shadow-pop`。
 
 ## 测试与环境注意

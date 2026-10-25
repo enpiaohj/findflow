@@ -28,6 +28,51 @@ pub struct SearchIndex {
     pub ocr: tantivy::schema::Field,
 }
 
+#[cfg(test)]
+mod recovery_tests {
+    #[test]
+    fn pending_rebuild_survives_reopening_and_lock_errors_preserve_index() {
+        crate::testutil::retry_on_index_io(|| {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path().join("index");
+            let index = super::SearchIndex::open_or_create(&dir).unwrap();
+            assert!(dir.join(".ff-rebuild-pending").exists());
+            assert!(super::SearchIndex::open_or_create(&dir).is_err());
+            assert!(!std::fs::read_dir(temp.path()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("index-backup-")));
+            drop(index);
+            let reopened = super::SearchIndex::open_or_create(&dir).unwrap();
+            assert!(!reopened.fresh);
+            assert!(dir.join(".ff-rebuild-pending").exists());
+        });
+    }
+    #[test]
+    fn incomplete_index_is_backed_up_before_rebuild() {
+        crate::testutil::retry_on_index_io(|| {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path().join("index");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("evidence"), b"original").unwrap();
+            let index = super::SearchIndex::open_or_create(&dir).unwrap();
+            assert!(index.fresh);
+            let backup = std::fs::read_dir(temp.path()).unwrap().flatten()
+                .find(|e| e.file_name().to_string_lossy().starts_with("index-backup-")).unwrap();
+            assert_eq!(std::fs::read(backup.path().join("evidence")).unwrap(), b"original");
+        });
+    }
+}
+
+fn backup_index(dir: &Path) -> Result<(), String> {
+    let parent = dir.parent().ok_or("索引目录没有父目录")?;
+    for n in 0..1000 {
+        let backup = parent.join(format!("index-backup-{}-{n}", crate::util::now_ms()));
+        if backup.try_exists().map_err(|e| e.to_string())? { continue; }
+        std::fs::rename(dir, &backup).map_err(|e| format!("无法备份原索引，停止重建：{e}"))?;
+        tracing::warn!("原索引保留于 {}", backup.display());
+        return std::fs::create_dir(dir).map_err(|e| e.to_string());
+    }
+    Err("无法分配索引备份目录".into())
+}
+
 fn text_opts(stored: bool, tokenizer_name: &str) -> TextOptions {
     // py/bi/tri/pya 仅需词频（无短语查询依赖位置），索引体积更小
     let indexing = tantivy::schema::TextFieldIndexing::default()
@@ -64,33 +109,39 @@ impl SearchIndex {
 
         // 格式版本标记：分词方案变更或索引损坏时清空重建（数据以 SQLite 为准，可全量重放）
         let format_path = dir.join(".ff-format");
-        let mut fresh = !dir.join("meta.json").exists();
-        if dir.join("meta.json").exists()
-            && std::fs::read_to_string(&format_path)
-                .map(|v| v.trim() != crate::tokenizer::INDEX_FORMAT)
-                .unwrap_or(true)
+        let has_meta = dir.join("meta.json").try_exists().map_err(|e| e.to_string())?;
+        let format_changed = match std::fs::read_to_string(&format_path) {
+            Ok(value) => value.trim() != crate::tokenizer::INDEX_FORMAT,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => return Err(format!("无法读取索引格式，原索引已保留：{error}")),
+        };
+        let mut fresh = !has_meta;
+        if (!has_meta && std::fs::read_dir(dir).map_err(|e| e.to_string())?.next().is_some())
+            || (has_meta && format_changed)
         {
-            for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
-                let _ = std::fs::remove_file(entry.path());
-            }
+            backup_index(dir)?;
             fresh = true;
-            tracing::warn!("索引格式变更，已清空旧索引待自动重建");
+            tracing::warn!("索引格式变更，已备份旧索引待自动重建");
         }
         let index = if fresh {
+            // 先持久化重放意图，再创建 meta，防止创建后进程中断留下空索引。
+            std::fs::File::create(dir.join(".ff-rebuild-pending")).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
             Index::create_in_dir(dir, schema.clone()).map_err(|e| e.to_string())?
         } else {
             match Index::open_in_dir(dir) {
                 Ok(i) => i,
-                Err(_) => {
-                    tracing::warn!("索引打开失败，重建索引");
-                    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
+                Err(error @ tantivy::TantivyError::DataCorruption(_))
+                | Err(error @ tantivy::TantivyError::IncompatibleIndex(_)) => {
+                    tracing::warn!("索引打开失败，备份后重建：{error}");
+                    backup_index(dir)?;
+                    fresh = true;
+                    std::fs::File::create(dir.join(".ff-rebuild-pending")).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
                     Index::create_in_dir(dir, schema.clone()).map_err(|e| e.to_string())?
                 }
+                Err(error) => return Err(format!("无法打开索引，原索引已保留：{error}")),
             }
         };
-        std::fs::write(&format_path, crate::tokenizer::INDEX_FORMAT).ok();
+        std::fs::write(&format_path, crate::tokenizer::INDEX_FORMAT).map_err(|e| e.to_string())?;
         tokenizer::register(&index)?;
         // 写入期间降当前线程优先级：批量重放不与界面争抢 CPU
         #[cfg(windows)]
@@ -101,9 +152,7 @@ impl SearchIndex {
             let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         }
         // 单线程 writer：桌面场景写入吞吐足够，且避免多 worker 的 io 并发问题
-        let writer = index
-            .writer_with_num_threads(1, 64 * 1024 * 1024)
-            .map_err(|e| e.to_string())?;
+        let writer_result = index.writer_with_num_threads(1, 64 * 1024 * 1024);
         #[cfg(windows)]
         unsafe {
             use windows::Win32::System::Threading::{
@@ -111,11 +160,22 @@ impl SearchIndex {
             };
             let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
         }
-        let reader = index
-            .reader_builder()
-            .reload_policy(ReloadPolicy::Manual)
-            .try_into()
-            .map_err(|e| e.to_string())?;
+        let initialized = (|| -> tantivy::Result<(IndexWriter, IndexReader)> {
+            let writer = writer_result?;
+            let reader = index.reader_builder().reload_policy(ReloadPolicy::Manual).try_into()?;
+            Ok((writer, reader))
+        })();
+        let (writer, reader) = match initialized {
+            Ok(value) => value,
+            Err(error @ tantivy::TantivyError::DataCorruption(_))
+            | Err(error @ tantivy::TantivyError::IncompatibleIndex(_)) if !fresh => {
+                tracing::warn!("索引段初始化失败，备份后重建：{error}");
+                drop(index);
+                backup_index(dir)?;
+                return Self::open_or_create(dir);
+            }
+            Err(error) => return Err(format!("无法初始化索引，原索引已保留：{error}")),
+        };
         Ok(Self {
             fresh,
             index,

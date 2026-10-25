@@ -4,6 +4,23 @@ use std::sync::OnceLock;
 /// 应用自身数据目录（数据库 / 索引 / 日志，小写归一化）。扫描与监听必须跳过，
 /// 否则范围包含数据目录时，自身写入会被监听回灌入库，形成无限循环。
 static APP_DATA_DIR: OnceLock<String> = OnceLock::new();
+static APP_DATA_ALIASES: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// 每个范围入口只解析一次，将真实数据子树映射回范围使用的路径。
+pub fn register_data_alias(root: &Path) {
+    let Some(data) = APP_DATA_DIR.get() else { return; };
+    let Ok(resolved) = std::fs::canonicalize(root) else { return; };
+    let resolved = normalize_path(&resolved).trim_end_matches('\\').to_lowercase();
+    let root = normalize_path(root).trim_end_matches('\\').to_lowercase();
+    let alias = if is_under(&resolved, data) {
+        root
+    } else if is_under(data, &resolved) {
+        format!("{root}{}", &data[resolved.len()..])
+    } else { return; };
+    if let Ok(mut aliases) = APP_DATA_ALIASES.write() {
+        if !aliases.contains(&alias) { aliases.push(alias); }
+    }
+}
 
 pub fn set_app_data_dir(p: &Path) {
     let _ = APP_DATA_DIR.set(normalize_path(p).trim_end_matches('\\').to_lowercase());
@@ -14,7 +31,8 @@ pub fn is_app_data_path(path: &str) -> bool {
     let Some(dir) = APP_DATA_DIR.get() else {
         return false;
     };
-    is_under(&path.to_lowercase(), dir)
+    let path = path.to_lowercase();
+    is_under(&path, dir) || APP_DATA_ALIASES.read().map(|aliases| aliases.iter().any(|alias| is_under(&path, alias))).unwrap_or(false)
 }
 
 /// `path` 是否等于 `dir` 或位于其下（两者均为小写、无尾部分隔符）。
@@ -193,6 +211,21 @@ pub fn is_dev_dir_path(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn junction_scope_alias_excludes_data_without_excluding_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let data = real.join("data"); std::fs::create_dir_all(&data).unwrap();
+        set_app_data_dir(&std::fs::canonicalize(&data).unwrap());
+        let alias = temp.path().join("alias");
+        let result = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&alias).arg(&real).output().unwrap();
+        assert!(result.status.success());
+        register_data_alias(&alias);
+        assert!(is_app_data_path(&normalize_path(&alias.join("data/findflow.db"))));
+        assert!(!is_app_data_path(&normalize_path(&alias.join("data-other/file"))));
+        std::fs::remove_dir(alias).unwrap();
+    }
     #[test]
     fn kind_mapping() {
         assert_eq!(kind_from("docx", false), "doc");

@@ -176,6 +176,35 @@ const MIGRATIONS: &[&str] = &[
      DROP INDEX IF EXISTS idx_files_name;"
 ];
 
+/// 使用同版本迁移生成参考结构，恢复接入时校验所有业务表与列，避免维护第二份 schema。
+pub fn validate_schema(conn: &Connection, version: i64) -> Result<(), String> {
+    if version < 1 || version as usize > MIGRATIONS.len() {
+        return Err(format!("数据库版本 {version} 不是可接入的 FindFlow 数据库"));
+    }
+    let reference = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    for script in MIGRATIONS.iter().take(version as usize) {
+        reference.execute_batch(script).map_err(|e| e.to_string())?;
+    }
+    let mut tables = reference.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map_err(|e| e.to_string())?;
+    let names = tables.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    for name in names {
+        let name = name.map_err(|e| e.to_string())?;
+        let mut columns = reference.prepare(&format!("PRAGMA table_info(\"{name}\")")).map_err(|e| e.to_string())?;
+        let names = columns.query_map([], |r| r.get::<_, String>(1)).map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let fields = names.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(",");
+        // SQLite 默认允许双引号字符串；使用表限定列名以确保缺列会报错。
+        let fields = fields.split(',').map(|n| format!("\"{name}\".{n}")).collect::<Vec<_>>().join(",");
+        conn.prepare(&format!("SELECT {fields} FROM \"{name}\" LIMIT 0"))
+            .map_err(|e| format!("数据库结构不兼容（{name}）：{e}"))?;
+    }
+    Ok(())
+}
+
+pub fn supported_version(version: i64) -> bool {
+    (1..=MIGRATIONS.len() as i64).contains(&version)
+}
+
 pub fn open(path: &Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(path)?;
     configure(&conn)?;

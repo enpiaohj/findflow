@@ -4,7 +4,7 @@ FindFlow 以 MIT 许可证发布（见 `LICENSE`）。本软件使用了下列�
 并按各自的许可证授权。分发 FindFlow 时请一并保留本声明。各许可证全文见对应项目仓库或其发布包。
 
 > 本清单由 `cargo tree`（Windows 目标、正常依赖）与 `package-lock.json`（生产依赖）生成，
-> 版本对应 FindFlow v0.8.2。其中 MPL-2.0 许可的组件（如 `cssparser`、`selectors`、`dtoa-short`、
+> 版本对应 FindFlow v0.9.0。其中 MPL-2.0 许可的组件（如 `cssparser`、`selectors`、`dtoa-short`、
 > `option-ext`）仅要求对这些文件本身的修改保持开源，FindFlow 未修改它们，其源码可在对应仓库获取。
 > 双重许可的组件（如 `r-efi`：MIT OR Apache-2.0 OR LGPL-2.1-or-later）在此选用其中宽松的 MIT / Apache-2.0。
 

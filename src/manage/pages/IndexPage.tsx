@@ -340,7 +340,7 @@ export default function IndexPage({ notice }: PageCtx) {
                 }
                 try {
                   await setDataDir(d);
-                  notice('存储位置已保存，重启应用后自动迁移数据；旧位置的数据库与索引将被清理');
+                  notice('迁移计划已保存；重启后复制并校验数据库，成功后切换。原数据库与索引保留');
                 } catch (e) {
                   notice(String(e));
                 }
@@ -352,7 +352,7 @@ export default function IndexPage({ notice }: PageCtx) {
         </div>
         <p className="muted">{usage?.dataDir ?? '读取中…'}</p>
         <p className="muted">数据库 {formatBytes(usage?.dbBytes ?? 0)} · 倒排索引 {formatBytes(usage?.indexBytes ?? 0)}</p>
-        <p className="muted">更改后重启应用：数据库自动迁移到新位置，索引在新位置重建，旧位置残留会被自动清理。</p>
+        <p className="muted">请选择空目录。重启后生成包含 WAL 的数据库快照，校验成功才切换位置并重建索引；失败保留原数据库。原位置不会自动清理，请确认新位置工作正常后再处理。</p>
         <button
           className="btn-primary"
           onClick={() => relaunchApp().catch((err: unknown) => notice(String(err)))}
