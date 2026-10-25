@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- FindFlow MSI 中文资源：覆盖 Tauri 内置 zh-CN 里仍为英文的字符串。
+     TauriLanguage / TauriCodepage 必须保留（2052 = 简体中文，936 = GBK 代码页）。 -->
+<WixLocalization Culture="zh-cn" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="TauriLanguage">2052</String>
+  <String Id="TauriCodepage">936</String>
+  <String Id="LaunchApp">启动 FindFlow</String>
+  <String Id="DowngradeErrorMessage">已安装更新版本的 FindFlow，无法降级安装。</String>
+  <String Id="PathEnvVarFeature">将 FindFlow 可执行文件所在位置添加到系统 PATH 环境变量，便于在任意位置调用。</String>
+  <String Id="InstallAppFeature">安装 FindFlow。</String>
+</WixLocalization>

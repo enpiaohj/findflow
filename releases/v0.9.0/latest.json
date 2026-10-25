@@ -1,0 +1,19 @@
+{
+  "version": "0.9.0",
+  "notes": "数据位置自愈：数据目录或目录链接失效时可在启动阶段选择原数据目录恢复，不再创建空库；更改存储位置改为生成并校验快照后切换，原数据保留；索引损坏先备份再重建，重建中断可在下次启动继续。",
+  "pub_date": "2026-10-25T07:37:51Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ21tTE56V29WRDRQVExOY3ZUaWtxN29KdHd5bVFJSDIzM1UrVzhCWUtsWVNQUVErcWVqYmFTWGYzNEM0Q0tvNGx6Vk56eG1UWDh6cUtQUkRjN1dGNEEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTEzODE2CWZpbGU6RmluZEZsb3ctdjAuOS4wLXdpbi14NjQtc2V0dXAuZXhlCXZlcnNpb246MC45LjAKMmdJSk9MWUdyR3phN3ZwSHNJaDVncmRRMzdQUmN0WkJVYXQ1YjY5eUJaSnIxdmdHVm5hNVBEMkpudGVFUk1Qa2tTbkl4eFlrd2ZybUNOZFgycFI1QlE9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.9.0/FindFlow-v0.9.0-win-x64-setup.exe"
+    },
+    "windows-x86_64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ3BRdXh5c1FiWVdQa0hVK1EvalBOOUtDU3I2YlZENzRGK3FMSGY5WnBEdXlmSzFKOU1GU1ZJTmFpRFB5bFhOY3pxaWFDRmhyMzR2djdacHNEdmRSU3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTEzODE2CWZpbGU6RmluZEZsb3ctdjAuOS4wLXdpbi14NjQubXNpCXZlcnNpb246MC45LjAKRUtvTmhRWmpUcHdUTzR5YlBXaVRnKzQ3ZTR1cEZSanZYelgzV0cxNEw5MnhTWTVOZ0l2UGF6T0dTM2YzN3VteXIrWTdCVGFpMTJDYUhGbGNSQzNCQkE9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.9.0/FindFlow-v0.9.0-win-x64.msi"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMkI1ZUNMa1JSQ21tTE56V29WRDRQVExOY3ZUaWtxN29KdHd5bVFJSDIzM1UrVzhCWUtsWVNQUVErcWVqYmFTWGYzNEM0Q0tvNGx6Vk56eG1UWDh6cUtQUkRjN1dGNEEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyOTEzODE2CWZpbGU6RmluZEZsb3ctdjAuOS4wLXdpbi14NjQtc2V0dXAuZXhlCXZlcnNpb246MC45LjAKMmdJSk9MWUdyR3phN3ZwSHNJaDVncmRRMzdQUmN0WkJVYXQ1YjY5eUJaSnIxdmdHVm5hNVBEMkpudGVFUk1Qa2tTbkl4eFlrd2ZybUNOZFgycFI1QlE9PQo=",
+      "url": "https://github.com/enpiaohj/findflow/releases/download/v0.9.0/FindFlow-v0.9.0-win-x64-setup.exe"
+    }
+  }
+}
